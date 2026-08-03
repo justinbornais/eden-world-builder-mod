@@ -3,6 +3,11 @@
 
 .extern GETKEY_IAT
 .extern CALLOC_IAT
+.extern GETENV_IAT
+.extern FOPEN_IAT
+.extern FREAD_IAT
+.extern FWRITE_IAT
+.extern FCLOSE_IAT
 .extern WORLD_REFPTR
 .extern BUILD_BLOCK
 .extern DESTROY_BLOCK
@@ -22,7 +27,9 @@
 .set EVENT_SIZE,    24
 .set MAX_EVENTS,    32768
 .set SLOT_SIZE,     0x0c0000
-.set ALLOC_SIZE,    0x840000
+.set ALLOC_SIZE,    0x840200
+.set PRESET_BYTES,  0x780000
+.set FILE_HEADER,   52
 
 .global macro_input
 macro_input:
@@ -101,6 +108,10 @@ macro_toggle:
     test rax, rax
     jz macro_toggle_done
     mov qword ptr [rip + MACRO_PTR], rax
+    /* Load persisted presets once, immediately after the lazy allocation. */
+    sub rsp, 8
+    call macro_load_file
+    add rsp, 8
 1:
     mov dword ptr [rip + MACRO_COUNT], 0
     mov byte ptr [rip + MACRO_STATE], 1
@@ -142,6 +153,7 @@ macro_save:
     lea ecx, [rax + rax*2]
     cld
     rep movsq
+    call macro_save_file
 macro_save_finish:
     mov byte ptr [rip + MACRO_STATE], 0
 macro_digit_done:
@@ -241,6 +253,159 @@ macro_prepare_anchor:
     pop rcx
 macro_prepare_done:
     ret
+
+/* Build %APPDATA%\Eden\eden_macros.dat in the allocation's tail buffer. */
+.org 0x400, 0xcc
+macro_make_path:
+    mov rcx, qword ptr [rip + MACRO_PTR]
+    add rcx, 0x840000
+    xor edx, edx
+1:
+    cmp edx, 400
+    jae 3f
+    mov al, byte ptr [r10 + rdx]
+    test al, al
+    jz 2f
+    mov byte ptr [rcx + rdx], al
+    inc edx
+    jmp 1b
+2:
+    lea r11, [rip + macro_suffix]
+    xor r8d, r8d
+4:
+    mov al, byte ptr [r11 + r8]
+    mov byte ptr [rcx + rdx], al
+    inc edx
+    inc r8d
+    test al, al
+    jnz 4b
+    mov rax, rcx
+    ret
+3:
+    xor eax, eax
+    ret
+
+macro_load_file:
+    push rbx
+    sub rsp, 0x20
+    lea rcx, [rip + appdata_name]
+    call qword ptr [rip + GETENV_IAT]
+    test rax, rax
+    jz macro_load_done
+    mov r10, rax
+    call macro_make_path
+    test rax, rax
+    jz macro_load_done
+    mov rcx, rax
+    lea rdx, [rip + mode_rb]
+    call qword ptr [rip + FOPEN_IAT]
+    test rax, rax
+    jz macro_load_done
+    mov rbx, rax
+    lea rcx, [rip + META + 0x60]
+    mov edx, 1
+    mov r8d, FILE_HEADER
+    mov r9, rbx
+    call qword ptr [rip + FREAD_IAT]
+    cmp eax, FILE_HEADER
+    jne macro_load_close
+    movabs rax, 0x313043414d4e4445 /* "EDNMAC01" */
+    cmp qword ptr [rip + META + 0x60], rax
+    jne macro_load_close
+    cmp dword ptr [rip + META + 0x68], 1
+    jne macro_load_close
+    xor ecx, ecx
+macro_validate_counts:
+    cmp ecx, 10
+    jae macro_load_slots
+    lea rdx, [rip + META + 0x6c]
+    cmp dword ptr [rdx + rcx*4], MAX_EVENTS
+    ja macro_load_close
+    inc ecx
+    jmp macro_validate_counts
+macro_load_slots:
+    mov rcx, qword ptr [rip + MACRO_PTR]
+    add rcx, SLOT_SIZE
+    mov edx, 1
+    mov r8d, PRESET_BYTES
+    mov r9, rbx
+    call qword ptr [rip + FREAD_IAT]
+    cmp eax, PRESET_BYTES
+    jne macro_load_close
+    xor ecx, ecx
+macro_copy_counts:
+    cmp ecx, 10
+    jae macro_load_close
+    lea rdx, [rip + META + 0x6c]
+    mov eax, dword ptr [rdx + rcx*4]
+    lea rdx, [rip + PRESET_COUNTS]
+    mov dword ptr [rdx + rcx*4], eax
+    inc ecx
+    jmp macro_copy_counts
+macro_load_close:
+    mov rcx, rbx
+    call qword ptr [rip + FCLOSE_IAT]
+macro_load_done:
+    add rsp, 0x20
+    pop rbx
+    ret
+
+macro_save_file:
+    push rbx
+    sub rsp, 0x20
+    lea rcx, [rip + appdata_name]
+    call qword ptr [rip + GETENV_IAT]
+    test rax, rax
+    jz macro_save_file_done
+    mov r10, rax
+    call macro_make_path
+    test rax, rax
+    jz macro_save_file_done
+    mov rcx, rax
+    lea rdx, [rip + mode_wb]
+    call qword ptr [rip + FOPEN_IAT]
+    test rax, rax
+    jz macro_save_file_done
+    mov rbx, rax
+    movabs rax, 0x313043414d4e4445
+    mov qword ptr [rip + META + 0x60], rax
+    mov dword ptr [rip + META + 0x68], 1
+    xor ecx, ecx
+macro_header_counts:
+    cmp ecx, 10
+    jae macro_write_header
+    lea rdx, [rip + PRESET_COUNTS]
+    mov eax, dword ptr [rdx + rcx*4]
+    lea rdx, [rip + META + 0x6c]
+    mov dword ptr [rdx + rcx*4], eax
+    inc ecx
+    jmp macro_header_counts
+macro_write_header:
+    lea rcx, [rip + META + 0x60]
+    mov edx, 1
+    mov r8d, FILE_HEADER
+    mov r9, rbx
+    call qword ptr [rip + FWRITE_IAT]
+    cmp eax, FILE_HEADER
+    jne macro_save_close
+    mov rcx, qword ptr [rip + MACRO_PTR]
+    add rcx, SLOT_SIZE
+    mov edx, 1
+    mov r8d, PRESET_BYTES
+    mov r9, rbx
+    call qword ptr [rip + FWRITE_IAT]
+macro_save_close:
+    mov rcx, rbx
+    call qword ptr [rip + FCLOSE_IAT]
+macro_save_file_done:
+    add rsp, 0x20
+    pop rbx
+    ret
+
+appdata_name: .asciz "APPDATA"
+mode_rb:      .asciz "rb"
+mode_wb:      .asciz "wb"
+macro_suffix: .asciz "\\Eden\\eden_macros.dat"
 
 .org 0x1000, 0xcc
 .global macro_build

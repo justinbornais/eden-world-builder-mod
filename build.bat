@@ -26,6 +26,11 @@ echo [2/6] Linking macro payload...
 ld -mi386pep --image-base 0x1446c4000 -e macro_input ^
   --defsym GETKEY_IAT=0x1402e7bb8 ^
   --defsym CALLOC_IAT=0x1402e82d0 ^
+  --defsym GETENV_IAT=0x1402e8300 ^
+  --defsym FOPEN_IAT=0x1402e7fe0 ^
+  --defsym FREAD_IAT=0x1402e8000 ^
+  --defsym FWRITE_IAT=0x1402e8020 ^
+  --defsym FCLOSE_IAT=0x1402e7fb0 ^
   --defsym WORLD_REFPTR=0x1402a8970 ^
   --defsym BUILD_BLOCK=0x140050a00 ^
   --defsym DESTROY_BLOCK=0x14004ce90 ^
