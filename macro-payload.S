@@ -140,6 +140,7 @@ macro_save:
     mov rdi, rsi
     add rdi, rcx
     lea ecx, [rax + rax*2]
+    cld
     rep movsq
 macro_save_finish:
     mov byte ptr [rip + MACRO_STATE], 0
@@ -200,6 +201,47 @@ macro_record_full:
 macro_record_done:
     ret
 
+/*
+ * Make replay independent of the block currently selected by the user.
+ * Preserve the selection, then apply the preset's first event before the
+ * native anchor placement. The argument registers for buildBlock are saved.
+ */
+.org 0x300, 0xcc
+.global macro_prepare_anchor
+macro_prepare_anchor:
+    cmp byte ptr [rip + MACRO_STATE], 5
+    jne macro_prepare_done
+    push rcx
+    push rdx
+    push r8
+    push r9
+    mov rax, qword ptr [rip + WORLD_REFPTR]
+    mov rax, qword ptr [rax]
+    mov rax, qword ptr [rax + 0x20]
+    mov edx, dword ptr [rax + 0x18]
+    mov dword ptr [rip + META + 0x50], edx
+    mov edx, dword ptr [rax + 0x1c]
+    mov dword ptr [rip + META + 0x54], edx
+    mov dl, byte ptr [rax + 0x9ec]
+    mov byte ptr [rip + META + 0x58], dl
+    movzx edx, byte ptr [rip + MACRO_SLOT]
+    inc edx
+    imul edx, edx, SLOT_SIZE
+    mov r10, qword ptr [rip + MACRO_PTR]
+    add r10, rdx
+    mov edx, dword ptr [r10 + 12]
+    mov dword ptr [rax + 0x18], edx
+    mov edx, dword ptr [r10 + 16]
+    mov dword ptr [rax + 0x1c], edx
+    mov dl, byte ptr [r10 + 20]
+    mov byte ptr [rax + 0x9ec], dl
+    pop r9
+    pop r8
+    pop rdx
+    pop rcx
+macro_prepare_done:
+    ret
+
 .org 0x1000, 0xcc
 .global macro_build
 macro_build:
@@ -231,11 +273,11 @@ macro_playback:
     mov rax, qword ptr [rip + WORLD_REFPTR]
     mov rax, qword ptr [rax]
     mov rbp, qword ptr [rax + 0x20]
-    mov eax, dword ptr [rbp + 0x18]
+    mov eax, dword ptr [rip + META + 0x50]
     mov dword ptr [rsp + 0x24], eax
-    mov eax, dword ptr [rbp + 0x1c]
+    mov eax, dword ptr [rip + META + 0x54]
     mov dword ptr [rsp + 0x28], eax
-    mov al, byte ptr [rbp + 0x9ec]
+    mov al, byte ptr [rip + META + 0x58]
     mov byte ptr [rsp + 0x2c], al
     xor ebx, ebx
 macro_play_loop:

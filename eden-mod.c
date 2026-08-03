@@ -657,6 +657,10 @@ static int build_repeat_payload(Code *c) {
      * Terrain::buildBlock directly, which also overwrites occupied cells.
      */
     c->autofill_entry = c->n;
+    /* Prepare a loaded macro's recorded first block as the anchor type. */
+    byte(c, 0xe8);
+    dword(c, (int32_t)((MACRO_CODE_VA + 0x300) -
+                       (REPEAT_CODE_VA + c->n + 4)));
     byte(c, 0xe8);
     dword(c, (int32_t)(UINT64_C(0x140050a00) -
                        (REPEAT_CODE_VA + c->n + 4)));
