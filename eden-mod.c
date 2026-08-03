@@ -36,6 +36,8 @@ enum {
     REPLACE_HOOK_OFF = 0xaadde,
     REPLACE_OCCUPIED_HOOK_OFF = 0xab105,
     AUTOFILL_BUILD_HOOK_OFF = 0xab716,
+    MACRO_DESTROY_HOOK_OFF = 0xab1e3,
+    MACRO_PAINT_HOOK_OFF = 0xab380,
     REACH_HOOK_OFF = 0x11bcb6,
     NOCLIP_HOOK_OFF = 0xadb10,
     NULL_TEXTURE_HOOK_OFF = 0xf62d0,
@@ -50,6 +52,8 @@ static const uint64_t UPDATE_VA  = UINT64_C(0x1400ac890);
 static const uint64_t REPEAT_CODE_VA = UINT64_C(0x1446c3000);
 static const uint64_t HUD_CODE_VA    = UINT64_C(0x1446c3800);
 static const uint64_t CAVE_VA        = UINT64_C(0x1446c4000);
+static const uint64_t MACRO_CODE_VA  = UINT64_C(0x1446c5000);
+static const uint64_t MACRO_STATE_VA = UINT64_C(0x1446c4f08);
 static const uint64_t FLY_MODE   = UINT64_C(0x1408f19b8);
 static const uint64_t FLY_UP     = UINT64_C(0x1408f19b9);
 static const uint64_t FLY_DOWN   = UINT64_C(0x1408f19ba);
@@ -275,6 +279,9 @@ static int build_repeat_payload(Code *c) {
     dword(c, (int32_t)(UINT64_C(0x1403128b0) - next)); byte(c, 1);
     byte(c, 0x0f); byte(c, 0x85);                 /* jne restore (rel32) */
     skip_all = c->n; dword(c, 0);
+    /* Macro input is isolated in the second half of the injected section. */
+    byte(c, 0xe8);
+    dword(c, (int32_t)(MACRO_CODE_VA - (REPEAT_CODE_VA + c->n + 4)));
     byte(c, 0xb9); dword(c, 0x50);                 /* mov ecx, VK_P */
     byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
     byte(c, 0xa8); byte(c, 1);                    /* new press? */
@@ -649,6 +656,10 @@ static int build_repeat_payload(Code *c) {
     byte(c, 0xe8);
     dword(c, (int32_t)(UINT64_C(0x140050a00) -
                        (REPEAT_CODE_VA + c->n + 4)));
+    /* Record this placement, or replay the selected preset from its anchor. */
+    byte(c, 0xe8);
+    dword(c, (int32_t)((MACRO_CODE_VA + 0x1000) -
+                       (REPEAT_CODE_VA + c->n + 4)));
     byte(c, 0x80); byte(c, 0x3d);
     next = REPEAT_CODE_VA + c->n + 5;
     dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 1);
@@ -985,6 +996,7 @@ static void hud_finish_skip(Code *c, size_t displacement) {
 
 static int build_hud_payload(Code *c) {
     size_t skip_hud, skip_f, skip_n, skip_p, skip_o, skip_fill, skip_clear;
+    size_t skip_macro;
     size_t state2_jump, state3_jump, state4_jump;
     size_t color_done1, color_done2, color_done3;
     size_t original_epilogue;
@@ -1115,6 +1127,37 @@ static int build_hud_payload(Code *c) {
     hud_rect(c, 119, 4, 137, 22);
     hud_finish_skip(c, skip_clear);
 
+    skip_macro = hud_skip_if_zero(c, MACRO_STATE_VA);
+    {
+        size_t green1, green2, dim_red, color_done, red_done;
+        byte(c, 0x80); byte(c, 0x3d);
+        { uint64_t next = HUD_CODE_VA + c->n + 5;
+          dword(c, (int32_t)(MACRO_STATE_VA - next)); }
+        byte(c, 3);
+        byte(c, 0x0f); byte(c, 0x84); green1 = c->n; dword(c, 0);
+        byte(c, 0x80); byte(c, 0x3d);
+        { uint64_t next = HUD_CODE_VA + c->n + 5;
+          dword(c, (int32_t)(MACRO_STATE_VA - next)); }
+        byte(c, 5);
+        byte(c, 0x0f); byte(c, 0x84); green2 = c->n; dword(c, 0);
+        /* Recording: alternate two dark-red intensities every ~256 ms. */
+        byte(c, 0xff); byte(c, 0x15); hud_rel32(c, GETTICK_IAT);
+        byte(c, 0xa9); dword(c, 0x100);
+        byte(c, 0x0f); byte(c, 0x85); dim_red = c->n; dword(c, 0);
+        hud_color(c, 0.82f, 0.01f, 0.06f);
+        byte(c, 0xe9); red_done = c->n; dword(c, 0);
+        local32(c, dim_red, c->n);
+        hud_color(c, 0.36f, 0.00f, 0.02f);
+        local32(c, red_done, c->n);
+        byte(c, 0xe9); color_done = c->n; dword(c, 0);
+        local32(c, green1, c->n);
+        local32(c, green2, c->n);
+        hud_color(c, 0.05f, 0.90f, 0.18f);
+        local32(c, color_done, c->n);
+    }
+    hud_rect(c, 142, 4, 160, 22);
+    hud_finish_skip(c, skip_macro);
+
     hud_gl_cap(c, 0x8076, UINT64_C(0x1400127b0)); /* restore color array */
     hud_gl_cap(c, 0x0de1, UINT64_C(0x1400126f0)); /* restore texturing */
     hud_gl_cap(c, 0x0b44, UINT64_C(0x1400126f0)); /* restore face culling */
@@ -1177,6 +1220,10 @@ int main(int argc, char **argv) {
         {0xf6,0x04,0x8a,0x40,0x0f,0x84,0x3b,0x06,0x00,0x00};
     static const unsigned char expected_autofill_build_hook[] =
         {0xe8,0xe5,0x46,0xfa,0xff};
+    static const unsigned char expected_macro_destroy_hook[] =
+        {0xe8,0xa8,0x10,0xfa,0xff};
+    static const unsigned char expected_macro_paint_hook[] =
+        {0xe8,0xeb,0x55,0xfa,0xff};
     static const unsigned char expected_reach_hook[] =
         {0x83,0xfe,0x78,0x0f,0x84,0x86,0x02,0x00,0x00};
     static const unsigned char expected_noclip_hook[] =
@@ -1188,10 +1235,12 @@ int main(int argc, char **argv) {
     unsigned char check[6], hook[6] = {0xe9,0,0,0,0,0x90};
     unsigned char vertical_add[5], vertical_branch[2];
     unsigned char vertical_store[5];
-    unsigned char repeat_hook[7], section_header[40], section_data[8192];
+    unsigned char repeat_hook[7], section_header[40], section_data[16384];
+    unsigned char macro_blob[0x2000];
     unsigned char bedrock_hook[10], bedrock_level_hook[9], tower_hook[6];
     unsigned char replace_hook[6], replace_occupied_hook[10], reach_hook[9];
     unsigned char autofill_build_hook[5];
+    unsigned char macro_destroy_hook[5], macro_paint_hook[5];
     unsigned char noclip_hook[6];
     unsigned char hud_hook[7];
     unsigned char null_texture_hook[8], stream_threshold[7];
@@ -1264,6 +1313,10 @@ int main(int argc, char **argv) {
     fread(replace_occupied_hook, 1, sizeof replace_occupied_hook, fp);
     fseek(fp, AUTOFILL_BUILD_HOOK_OFF, SEEK_SET);
     fread(autofill_build_hook, 1, sizeof autofill_build_hook, fp);
+    fseek(fp, MACRO_DESTROY_HOOK_OFF, SEEK_SET);
+    fread(macro_destroy_hook, 1, sizeof macro_destroy_hook, fp);
+    fseek(fp, MACRO_PAINT_HOOK_OFF, SEEK_SET);
+    fread(macro_paint_hook, 1, sizeof macro_paint_hook, fp);
     fseek(fp, REACH_HOOK_OFF, SEEK_SET);
     fread(reach_hook, 1, sizeof reach_hook, fp);
     fseek(fp, NOCLIP_HOOK_OFF, SEEK_SET);
@@ -1317,6 +1370,10 @@ int main(int argc, char **argv) {
                sizeof expected_replace_occupied_hook) != 0 ||
         memcmp(autofill_build_hook, expected_autofill_build_hook,
                sizeof expected_autofill_build_hook) != 0 ||
+        memcmp(macro_destroy_hook, expected_macro_destroy_hook,
+               sizeof expected_macro_destroy_hook) != 0 ||
+        memcmp(macro_paint_hook, expected_macro_paint_hook,
+               sizeof expected_macro_paint_hook) != 0 ||
         memcmp(reach_hook, expected_reach_hook,
                sizeof expected_reach_hook) != 0 ||
         memcmp(noclip_hook, expected_noclip_hook,
@@ -1354,6 +1411,17 @@ int main(int argc, char **argv) {
         puts("Internal error: HUD indicator payload is too large.");
         return 1;
     }
+    memset(macro_blob, 0xcc, sizeof macro_blob);
+    fp = fopen("macro-payload.bin", "rb");
+    if (!fp) {
+        puts("Cannot open macro-payload.bin; assemble the macro payload first.");
+        return 1;
+    }
+    size = (long)fread(macro_blob, 1, sizeof macro_blob, fp);
+    if (fgetc(fp) != EOF || size <= 0) {
+        fclose(fp); puts("Macro payload is empty or exceeds 8192 bytes."); return 1;
+    }
+    fclose(fp);
     if (!copy_file(src, dst)) {
         fprintf(stderr, "Could not create output: %s\n", dst);
         return 1;
@@ -1365,9 +1433,9 @@ int main(int argc, char **argv) {
     /* Add an isolated executable section for the unrelated repeat-input hook. */
     memset(section_header, 0, sizeof section_header);
     memcpy(section_header, ".repeat", 7);
-    put32(section_header + 8,  0x2000);     /* VirtualSize */
+    put32(section_header + 8,  0x4000);     /* VirtualSize */
     put32(section_header + 12, 0x46c3000);  /* VirtualAddress */
-    put32(section_header + 16, 0x2000);     /* SizeOfRawData */
+    put32(section_header + 16, 0x4000);     /* SizeOfRawData */
     put32(section_header + 20, NEW_SECTION_RAW_OFF);
     /*
      * The section contains both code and the repeat state/timestamp at
@@ -1378,6 +1446,9 @@ int main(int argc, char **argv) {
     memcpy(section_data, repeat_code.b, repeat_code.n);
     memcpy(section_data + 0x800, hud_code.b, hud_code.n);
     memcpy(section_data + 0x1000, code.b, code.n);
+    memcpy(section_data + 0x2000, macro_blob, sizeof macro_blob);
+    /* Macro pointer, state, anchor, count, slot, and preset counts start empty. */
+    memset(section_data + 0x1f00, 0, 0x100);
     section_data[0x7e0] = 0;                /* repeat mode defaults off */
     memset(section_data + 0x7e4, 0, 4);      /* last repeat timestamp */
     section_data[0x7e8] = 0;                /* bedrock breaking defaults off */
@@ -1390,7 +1461,7 @@ int main(int argc, char **argv) {
     put32(section_data + 0x7d4, 0x3f4ccccd); /* horizontal coast: 0.8 */
     put32(section_data + 0x7d8, 0x3f7851ec); /* vertical coast: 0.97 */
     section_count = 9;
-    size_of_image = 0x46c5000;
+    size_of_image = 0x46c7000;
     fseek(fp, NEW_SECTION_HEADER_OFF, SEEK_SET);
     if (fwrite(section_header, 1, sizeof section_header, fp) !=
         sizeof section_header) {
@@ -1475,6 +1546,24 @@ int main(int argc, char **argv) {
         sizeof autofill_build_hook) {
         fclose(fp); puts("Failed while installing auto-fill build hook.");
         return 1;
+    }
+    macro_destroy_hook[0] = 0xe9;
+    rel = (int32_t)((MACRO_CODE_VA + 0x1800) -
+                    (UINT64_C(0x1400abde3) + 5));
+    memcpy(macro_destroy_hook + 1, &rel, sizeof rel);
+    fseek(fp, MACRO_DESTROY_HOOK_OFF, SEEK_SET);
+    if (fwrite(macro_destroy_hook, 1, sizeof macro_destroy_hook, fp) !=
+        sizeof macro_destroy_hook) {
+        fclose(fp); puts("Failed while installing macro destroy hook."); return 1;
+    }
+    macro_paint_hook[0] = 0xe9;
+    rel = (int32_t)((MACRO_CODE_VA + 0x1840) -
+                    (UINT64_C(0x1400abf80) + 5));
+    memcpy(macro_paint_hook + 1, &rel, sizeof rel);
+    fseek(fp, MACRO_PAINT_HOOK_OFF, SEEK_SET);
+    if (fwrite(macro_paint_hook, 1, sizeof macro_paint_hook, fp) !=
+        sizeof macro_paint_hook) {
+        fclose(fp); puts("Failed while installing macro paint hook."); return 1;
     }
     reach_hook[0] = 0xe9;
     rel = (int32_t)((REPEAT_CODE_VA + repeat_code.reach_entry) -
@@ -1572,12 +1661,7 @@ int main(int argc, char **argv) {
         fclose(fp); puts("Failed while adding vertical deceleration.");
         return 1;
     }
-    /*
-     * Experimental large-batch terrain streaming. The stock game recenters
-     * after more than 140 entries in its 28x28 terrain window are missing.
-     * Wait for roughly ten exposed rows (280 entries) so the unavoidable
-     * synchronous save/rebuild overhead occurs much less frequently.
-     */
+    /* Preserve the established terrain-streaming threshold patch. */
     if (streaming) {
         stream_threshold[3] = 0x18; /* 0x118 = 280 */
         stream_threshold[4] = 0x01;
@@ -1611,7 +1695,7 @@ int main(int argc, char **argv) {
     puts("Replace mode: O toggle (vibrant-pink HUD indicator).");
     puts("Auto-fill: L starts/arms filled; K arms hollow after point A.");
     puts("Area clear: J sets point A, then J arms point B.");
-    if (streaming)
-        puts("Experimental terrain streaming: large, less-frequent recenter batches.");
+    puts("Macros: M records/stops; 1-0 saves or selects a session preset.");
+    puts("Macro recording automatically stops at 32,768 edits.");
     return 0;
 }
