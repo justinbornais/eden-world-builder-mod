@@ -1,0 +1,1617 @@
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*
+ * Mod patch for Eden - World Builder PC v1.5.0 (64-bit).
+ *
+ * The older patcher which used offsets 0x38f6b, 0x39069, ... was made for a
+ * different executable.  This patch enables the flight code already present
+ * in this build and feeds it held-key state:
+ *
+ *     V             toggle flight on/off
+ *     WASD          horizontal movement
+ *     Space         fly up
+ *     Left/Right Ctrl  fly down
+ *
+ * It writes a small trampoline into unused, executable alignment padding and
+ * hooks Player::update().  All addresses below are guarded by byte signatures;
+ * an unknown or already-modified executable is refused rather than corrupted.
+ */
+
+enum {
+    EXPECTED_SIZE = 4110848,
+    UPDATE_OFF    = 0xabc90,
+    FLY_XZ_SPEED_OFF = 0x2b6d90,
+    FLY_DRAG_OFF = 0x2b6e20,
+    FLY_Y_SPEED_OFF  = 0x2b6e38,
+    VERTICAL_ADD_OFF = 0xac6f8,
+    VERTICAL_STORE_BRANCH_OFF = 0xac704,
+    VERTICAL_STORE_OFF = 0xac70e,
+    REPEAT_HOOK_OFF = 0x3694,
+    BEDROCK_HOOK_OFF = 0x4c32c,
+    BEDROCK_LEVEL_HOOK_OFF = 0xa9c2a,
+    TOWER_HOOK_OFF = 0xa9e0f,
+    REPLACE_HOOK_OFF = 0xaadde,
+    REPLACE_OCCUPIED_HOOK_OFF = 0xab105,
+    AUTOFILL_BUILD_HOOK_OFF = 0xab716,
+    REACH_HOOK_OFF = 0x11bcb6,
+    NOCLIP_HOOK_OFF = 0xadb10,
+    NULL_TEXTURE_HOOK_OFF = 0xf62d0,
+    HUD_HOOK_OFF = 0x9951d,
+    STREAM_THRESHOLD_OFF = 0x551df,
+    STREAM_EMERGENCY_OFF = 0x5525d,
+    NEW_SECTION_HEADER_OFF = 0x2c0,
+    NEW_SECTION_RAW_OFF = 0x3eba00
+};
+
+static const uint64_t UPDATE_VA  = UINT64_C(0x1400ac890);
+static const uint64_t REPEAT_CODE_VA = UINT64_C(0x1446c3000);
+static const uint64_t HUD_CODE_VA    = UINT64_C(0x1446c3800);
+static const uint64_t CAVE_VA        = UINT64_C(0x1446c4000);
+static const uint64_t FLY_MODE   = UINT64_C(0x1408f19b8);
+static const uint64_t FLY_UP     = UINT64_C(0x1408f19b9);
+static const uint64_t FLY_DOWN   = UINT64_C(0x1408f19ba);
+static const uint64_t GETKEY_IAT = UINT64_C(0x1402e7bb8);
+static const uint64_t MOVE_X     = UINT64_C(0x140312a34);
+static const uint64_t MOVE_Y     = UINT64_C(0x140312a38);
+static const uint64_t HORIZONTAL_DRAG = UINT64_C(0x1446c37d4);
+static const uint64_t VERTICAL_DRAG   = UINT64_C(0x1446c37d8);
+static const uint64_t REPEAT_STATE_VA = UINT64_C(0x1446c37e0);
+static const uint64_t REPEAT_TICK_VA  = UINT64_C(0x1446c37e4);
+static const uint64_t BEDROCK_STATE_VA= UINT64_C(0x1446c37e8);
+static const uint64_t NOCLIP_STATE_VA = UINT64_C(0x1446c37e9);
+static const uint64_t REPLACE_STATE_VA= UINT64_C(0x1446c37ea);
+static const uint64_t AUTOFILL_STATE_VA=UINT64_C(0x1446c37eb);
+static const uint64_t AUTOFILL_X_VA    =UINT64_C(0x1446c37ec);
+static const uint64_t AUTOFILL_Y_VA    =UINT64_C(0x1446c37f0);
+static const uint64_t AUTOFILL_Z_VA    =UINT64_C(0x1446c37f4);
+static const uint64_t CLEAR_STATE_VA   =UINT64_C(0x1446c37c0);
+static const uint64_t CLEAR_X_VA       =UINT64_C(0x1446c37c4);
+static const uint64_t CLEAR_Y_VA       =UINT64_C(0x1446c37c8);
+static const uint64_t CLEAR_Z_VA       =UINT64_C(0x1446c37cc);
+static const uint64_t LMB_PREV        = UINT64_C(0x1403128ec);
+static const uint64_t PLAYER_PREV_RT  = UINT64_C(0x1408f1dd0);
+static const uint64_t GETTICK_IAT     = UINT64_C(0x1402e7db0);
+
+typedef struct {
+    unsigned char b[2048];
+    size_t n;
+    size_t vertical_entry;
+    size_t bedrock_entry;
+    size_t bedrock_level_entry;
+    size_t tower_entry;
+    size_t replace_entry;
+    size_t replace_occupied_entry;
+    size_t autofill_entry;
+    size_t reach_entry;
+    size_t noclip_entry;
+    size_t null_texture_entry;
+} Code;
+
+static void byte(Code *c, unsigned v) { c->b[c->n++] = (unsigned char)v; }
+static void bytes(Code *c, const unsigned char *p, size_t n) {
+    memcpy(c->b + c->n, p, n);
+    c->n += n;
+}
+static void dword(Code *c, int32_t v) {
+    byte(c, (unsigned)v);
+    byte(c, (unsigned)(v >> 8));
+    byte(c, (unsigned)(v >> 16));
+    byte(c, (unsigned)(v >> 24));
+}
+static void rip32(Code *c, uint64_t target) {
+    uint64_t next = CAVE_VA + c->n + 4;
+    dword(c, (int32_t)(target - next));
+}
+static void call_get_key(Code *c, unsigned vk, uint64_t destination) {
+    static const unsigned char mov_ecx[] = {0xb9};
+    static const unsigned char call_iat[] = {0xff, 0x15};
+    static const unsigned char test_ax[] = {0x66, 0x85, 0xc0};
+    static const unsigned char sets_al[] = {0x0f, 0x98, 0xc0};
+    static const unsigned char store_al[] = {0x88, 0x05};
+    bytes(c, mov_ecx, sizeof mov_ecx); dword(c, (int32_t)vk);
+    bytes(c, call_iat, sizeof call_iat); rip32(c, GETKEY_IAT);
+    bytes(c, test_ax, sizeof test_ax);
+    bytes(c, sets_al, sizeof sets_al);
+    bytes(c, store_al, sizeof store_al); rip32(c, destination);
+}
+static void toggle_flight_on_v(Code *c) {
+    static const unsigned char mov_ecx[] = {0xb9};
+    static const unsigned char call_iat[] = {0xff, 0x15};
+    static const unsigned char test_pressed[] = {0xa8, 0x01};
+    static const unsigned char skip_xor[] = {0x74, 0x07};
+    static const unsigned char xor_global[] = {0x80, 0x35};
+    uint64_t next;
+
+    bytes(c, mov_ecx, sizeof mov_ecx); dword(c, 0x56); /* VK_V */
+    bytes(c, call_iat, sizeof call_iat); rip32(c, GETKEY_IAT);
+    /*
+     * Bit 0 reports a new press since the preceding call.  Toggling only on
+     * that bit prevents a held V key from flipping flight every frame.
+     */
+    bytes(c, test_pressed, sizeof test_pressed);
+    bytes(c, skip_xor, sizeof skip_xor);
+    bytes(c, xor_global, sizeof xor_global);
+    next = CAVE_VA + c->n + 5; /* disp32 plus the trailing imm8 */
+    dword(c, (int32_t)(FLY_MODE - next));
+    byte(c, 1);
+}
+static void stop_flight_without_move_input(Code *c) {
+    static const unsigned char cmp_mode[] = {0x80, 0x3d};
+    static const unsigned char mov_eax[] = {0x8b, 0x05};
+    static const unsigned char or_eax[] = {0x0b, 0x05};
+    static const unsigned char load_player[] = {0x48,0x8b,0x54,0x24,0x30};
+    static const unsigned char fld_x[] = {0xd9,0x42,0x24};
+    static const unsigned char fld_z[] = {0xd9,0x42,0x2c};
+    static const unsigned char fmul_drag[] = {0xd8,0x0d};
+    static const unsigned char fstp_x[] = {0xd9,0x5a,0x24};
+    static const unsigned char fstp_z[] = {0xd9,0x5a,0x2c};
+    size_t mode_skip, input_skip, end;
+    uint64_t next;
+
+    /* Only cancel momentum while flight mode is active. */
+    bytes(c, cmp_mode, sizeof cmp_mode);
+    next = CAVE_VA + c->n + 5; /* disp32 plus the trailing imm8 */
+    dword(c, (int32_t)(FLY_MODE - next));
+    byte(c, 1);
+    byte(c, 0x75); mode_skip = c->n; byte(c, 0); /* jne end */
+
+    /* The desktop input layer has already converted WASD into these axes. */
+    bytes(c, mov_eax, sizeof mov_eax); rip32(c, MOVE_X);
+    bytes(c, or_eax, sizeof or_eax); rip32(c, MOVE_Y);
+    byte(c, 0x75); input_skip = c->n; byte(c, 0); /* jne end */
+
+    bytes(c, load_player, sizeof load_player);
+    bytes(c, fld_x, sizeof fld_x);
+    bytes(c, fmul_drag, sizeof fmul_drag); rip32(c, HORIZONTAL_DRAG);
+    bytes(c, fstp_x, sizeof fstp_x);
+    bytes(c, fld_z, sizeof fld_z);
+    bytes(c, fmul_drag, sizeof fmul_drag); rip32(c, HORIZONTAL_DRAG);
+    bytes(c, fstp_z, sizeof fstp_z);
+
+    end = c->n;
+    c->b[mode_skip] = (unsigned char)(end - mode_skip - 1);
+    c->b[input_skip] = (unsigned char)(end - input_skip - 1);
+}
+
+static int build_payload(Code *c) {
+    static const unsigned char save[] = {
+        0x51,                             /* push rcx; align stack */
+        0x48,0x83,0xec,0x30,             /* shadow space + saved xmm1 */
+        0xf3,0x0f,0x11,0x4c,0x24,0x28   /* save xmm1 */
+    };
+    static const unsigned char restore[] = {
+        0xf3,0x0f,0x10,0x4c,0x24,0x28,
+        0x48,0x83,0xc4,0x30,
+        0x59,                             /* pop rcx */
+        0x41,0x57,                       /* original: push r15 */
+        0x41,0x56,                       /* original: push r14 */
+        0x41,0x55                        /* original: push r13 */
+    };
+    static const unsigned char jmp[] = {0xe9};
+
+    memset(c, 0, sizeof *c);
+    bytes(c, save, sizeof save);
+    toggle_flight_on_v(c);
+    call_get_key(c, 0x20, FLY_UP);       /* VK_SPACE */
+    call_get_key(c, 0x11, FLY_DOWN);     /* VK_CONTROL */
+    stop_flight_without_move_input(c);
+    bytes(c, restore, sizeof restore);
+    bytes(c, jmp, sizeof jmp);
+    dword(c, (int32_t)((UPDATE_VA + 6) - (CAVE_VA + c->n + 4)));
+
+    /*
+     * Common vertical store. Acceleration must remain undamped while either
+     * vertical key is held; apply the 97% coast only after both are released.
+     */
+    c->vertical_entry = c->n;
+    {
+        static const unsigned char cmp_vertical_keys[] = {0x66,0x83,0x3d};
+        static const unsigned char skip_drag[] = {0x75,0x08};
+        static const unsigned char mul_vertical[] = {0xf3,0x0f,0x59,0x05};
+        static const unsigned char store_vertical[] =
+            {0xf3,0x0f,0x11,0x47,0x28};
+        uint64_t next;
+        bytes(c, cmp_vertical_keys, sizeof cmp_vertical_keys);
+        next = CAVE_VA + c->n + 5; /* disp32 plus trailing imm8 zero */
+        dword(c, (int32_t)(FLY_UP - next));
+        byte(c, 0);
+        bytes(c, skip_drag, sizeof skip_drag);
+        bytes(c, mul_vertical, sizeof mul_vertical); rip32(c, VERTICAL_DRAG);
+        bytes(c, store_vertical, sizeof store_vertical);
+        bytes(c, jmp, sizeof jmp);
+        dword(c, (int32_t)(UINT64_C(0x1400ad313) -
+                           (CAVE_VA + c->n + 4)));
+    }
+    return c->n <= 186;
+}
+
+static void repeat_rip32(Code *c, uint64_t target) {
+    uint64_t next = REPEAT_CODE_VA + c->n + 4;
+    dword(c, (int32_t)(target - next));
+}
+
+static void local32(Code *c, size_t displacement, size_t target) {
+    int32_t rel = (int32_t)(target - (displacement + 4));
+    memcpy(c->b + displacement, &rel, sizeof rel);
+}
+
+static int build_repeat_payload(Code *c) {
+    static const unsigned char save[] = {
+        0x50,0x51,0x52,0x41,0x50,0x41,0x51,
+        0x41,0x52,0x41,0x53,                   /* volatile GPRs */
+        0x48,0x83,0xec,0x28                    /* shadow + alignment */
+    };
+    static const unsigned char restore[] = {
+        0x48,0x83,0xc4,0x28,
+        0x41,0x5b,0x41,0x5a,0x41,0x59,0x41,0x58,0x5a,0x59,0x58
+    };
+    static const unsigned char original_load_op[] = {0x0f,0xb6,0x05};
+    size_t skip_all, skip_clear, throttle_skip, restore_at;
+    size_t clear_first_dispatch, clear_begin_dispatch;
+    uint64_t next;
+
+    memset(c, 0, sizeof *c);
+    bytes(c, save, sizeof save);
+    /* Escape cancels selections even if it simultaneously releases input. */
+    {
+        size_t esc_done;
+        byte(c, 0xb9); dword(c, 0x1b);             /* mov ecx, VK_ESCAPE */
+        byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
+        byte(c, 0x66); byte(c, 0x85); byte(c, 0xc0); /* pressed or held */
+        byte(c, 0x74); esc_done = c->n; byte(c, 0);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 0);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 0);
+        c->b[esc_done] = (unsigned char)(c->n - esc_done - 1);
+    }
+    byte(c, 0x80); byte(c, 0x3d);                 /* gameplay capture only */
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(UINT64_C(0x1403128b0) - next)); byte(c, 1);
+    byte(c, 0x0f); byte(c, 0x85);                 /* jne restore (rel32) */
+    skip_all = c->n; dword(c, 0);
+    byte(c, 0xb9); dword(c, 0x50);                 /* mov ecx, VK_P */
+    byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
+    byte(c, 0xa8); byte(c, 1);                    /* new press? */
+    byte(c, 0x74); byte(c, 0x16);                 /* skip state cycle */
+    byte(c, 0xfe); byte(c, 0x05);                 /* inc repeat state */
+    repeat_rip32(c, REPEAT_STATE_VA);
+    byte(c, 0x80); byte(c, 0x3d);                 /* reached state 5? */
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 5);
+    byte(c, 0x72); byte(c, 7);                    /* states 1-4: keep */
+    byte(c, 0xc6); byte(c, 0x05);                 /* state 5 -> off */
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 0);
+
+    /* B independently toggles permission to destroy block ID 1 (bedrock). */
+    byte(c, 0xb9); dword(c, 0x42);                 /* mov ecx, VK_B */
+    byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
+    byte(c, 0xa8); byte(c, 1);
+    byte(c, 0x74); byte(c, 7);
+    byte(c, 0x80); byte(c, 0x35);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(BEDROCK_STATE_VA - next)); byte(c, 1);
+
+    /* N independently toggles collision-free player movement. */
+    byte(c, 0xb9); dword(c, 0x4e);                 /* mov ecx, VK_N */
+    byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
+    byte(c, 0xa8); byte(c, 1);
+    byte(c, 0x74); byte(c, 7);
+    byte(c, 0x80); byte(c, 0x35);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(NOCLIP_STATE_VA - next)); byte(c, 1);
+
+    /* O independently toggles placing into the targeted block. */
+    byte(c, 0xb9); dword(c, 0x4f);                 /* mov ecx, VK_O */
+    byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
+    byte(c, 0xa8); byte(c, 1);
+    byte(c, 0x74); byte(c, 7);
+    byte(c, 0x80); byte(c, 0x35);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPLACE_STATE_VA - next)); byte(c, 1);
+
+    /* L starts point A, or arms a filled point B after A was recorded. */
+    {
+        size_t l_done, l_not_zero, l_cancel, l_finish1, l_finish2;
+        byte(c, 0xb9); dword(c, 0x4c);             /* mov ecx, VK_L */
+        byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
+        byte(c, 0xa8); byte(c, 1);
+        byte(c, 0x74); l_done = c->n; byte(c, 0);
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 0);
+        byte(c, 0x75); l_not_zero = c->n; byte(c, 0);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 1);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 0);
+        byte(c, 0xeb); l_finish1 = c->n; byte(c, 0);
+        c->b[l_not_zero] = (unsigned char)(c->n - l_not_zero - 1);
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 2);
+        byte(c, 0x75); l_cancel = c->n; byte(c, 0);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 3);
+        byte(c, 0xeb); l_finish2 = c->n; byte(c, 0);
+        c->b[l_cancel] = (unsigned char)(c->n - l_cancel - 1);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 0);
+        c->b[l_finish1] = (unsigned char)(c->n - l_finish1 - 1);
+        c->b[l_finish2] = (unsigned char)(c->n - l_finish2 - 1);
+        c->b[l_done] = (unsigned char)(c->n - l_done - 1);
+    }
+
+    /* K arms a hollow point B once point A has been recorded. */
+    {
+        size_t k_done, k_inactive, k_cancel, k_finish;
+        byte(c, 0xb9); dword(c, 0x4b);             /* mov ecx, VK_K */
+        byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
+        byte(c, 0xa8); byte(c, 1);
+        byte(c, 0x74); k_inactive = c->n; byte(c, 0);
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 0);
+        byte(c, 0x74); k_done = c->n; byte(c, 0);
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 2);
+        byte(c, 0x75); k_cancel = c->n; byte(c, 0);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 4);
+        byte(c, 0xeb); k_finish = c->n; byte(c, 0);
+        c->b[k_cancel] = (unsigned char)(c->n - k_cancel - 1);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 0);
+        c->b[k_finish] = (unsigned char)(c->n - k_finish - 1);
+        c->b[k_inactive] = (unsigned char)(c->n - k_inactive - 1);
+        c->b[k_done] = (unsigned char)(c->n - k_done - 1);
+    }
+
+    /* J starts point A, or arms point B for an inclusive clear operation. */
+    {
+        size_t j_done, j_not_zero, j_cancel, j_finish1, j_finish2;
+        byte(c, 0xb9); dword(c, 0x4a);             /* mov ecx, VK_J */
+        byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
+        byte(c, 0xa8); byte(c, 1);
+        byte(c, 0x74); j_done = c->n; byte(c, 0);
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 0);
+        byte(c, 0x75); j_not_zero = c->n; byte(c, 0);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 1);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 0);
+        byte(c, 0xeb); j_finish1 = c->n; byte(c, 0);
+        c->b[j_not_zero] = (unsigned char)(c->n - j_not_zero - 1);
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 2);
+        byte(c, 0x75); j_cancel = c->n; byte(c, 0);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 3);
+        byte(c, 0xeb); j_finish2 = c->n; byte(c, 0);
+        c->b[j_cancel] = (unsigned char)(c->n - j_cancel - 1);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 0);
+        c->b[j_finish1] = (unsigned char)(c->n - j_finish1 - 1);
+        c->b[j_finish2] = (unsigned char)(c->n - j_finish2 - 1);
+        c->b[j_done] = (unsigned char)(c->n - j_done - 1);
+    }
+
+    byte(c, 0x80); byte(c, 0x3d);                 /* state zero = off */
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 0);
+    byte(c, 0x74); skip_clear = c->n; byte(c, 0);
+
+    /*
+     * One shared attempt window for held placement/breaking. GetTickCount's
+     * unsigned wraparound is intentional here: subtraction remains correct.
+     */
+    byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETTICK_IAT);
+    byte(c, 0x41); byte(c, 0x89); byte(c, 0xc0); /* mov r8d, eax */
+    byte(c, 0x2b); byte(c, 0x05);                 /* sub eax, last_tick */
+    repeat_rip32(c, REPEAT_TICK_VA);
+    byte(c, 0xb9); dword(c, 200);                 /* state 1: 5/sec */
+    byte(c, 0xba); dword(c, 100);                 /* state 2: 10/sec */
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 2);
+    byte(c, 0x0f); byte(c, 0x44); byte(c, 0xca); /* cmove ecx, edx */
+    byte(c, 0xba); dword(c, 50);                  /* state 3: 20/sec */
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 3);
+    byte(c, 0x0f); byte(c, 0x44); byte(c, 0xca);
+    byte(c, 0xba); dword(c, 20);                  /* state 4: 50/sec */
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 4);
+    byte(c, 0x0f); byte(c, 0x44); byte(c, 0xca);
+    byte(c, 0x39); byte(c, 0xc8);                 /* cmp eax, ecx */
+    byte(c, 0x72); throttle_skip = c->n; byte(c, 0);
+    byte(c, 0x44); byte(c, 0x89); byte(c, 0x05); /* last_tick = r8d */
+    repeat_rip32(c, REPEAT_TICK_VA);
+
+    /* Clear desktop L/R previous-state bytes while repeat mode is enabled. */
+    byte(c, 0x66); byte(c, 0xc7); byte(c, 0x05);
+    next = REPEAT_CODE_VA + c->n + 6;
+    dword(c, (int32_t)(LMB_PREV - next)); byte(c, 0); byte(c, 0);
+
+    /* Clear Player's RT1/RT2/LT1/LT2 edge-state bytes as one dword. */
+    byte(c, 0xc7); byte(c, 0x05);
+    next = REPEAT_CODE_VA + c->n + 8;
+    dword(c, (int32_t)(PLAYER_PREV_RT - next));
+    dword(c, 0);
+    c->b[skip_clear] = (unsigned char)(c->n - skip_clear - 1);
+
+    restore_at = c->n;
+    {
+        int32_t rel = (int32_t)(restore_at - (skip_all + 4));
+        memcpy(c->b + skip_all, &rel, sizeof rel);
+    }
+    c->b[throttle_skip] = (unsigned char)(restore_at - throttle_skip - 1);
+    bytes(c, restore, sizeof restore);
+    bytes(c, original_load_op, sizeof original_load_op);
+    repeat_rip32(c, UINT64_C(0x1403128b0)); /* original g_mouseCaptured */
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x14000429b) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+
+    /* Terrain::destroyBlock hook: preserve ID 0x47 guard; toggle ID 1 only. */
+    c->bedrock_entry = c->n;
+    byte(c, 0x41); byte(c, 0x83); byte(c, 0xfc); byte(c, 1);
+    byte(c, 0x75); byte(c, 0x0e);                 /* other ID -> original */
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(BEDROCK_STATE_VA - next)); byte(c, 1);
+    byte(c, 0x74); byte(c, 5);                    /* enabled -> original */
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x14004d997) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x14004cf36) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+
+    /*
+     * Player::placeBlock rejects level-4 blocks before destroyBlock is called.
+     * Permit that otherwise-unreachable path only while the B toggle is on.
+     */
+    c->bedrock_level_entry = c->n;
+    byte(c, 0x83); byte(c, 0xf8); byte(c, 3);     /* cmp eax, 3 */
+    byte(c, 0x7e); byte(c, 0x0e);                 /* ordinary level -> proceed */
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(BEDROCK_STATE_VA - next)); byte(c, 1);
+    byte(c, 0x74); byte(c, 5);                    /* B enabled -> proceed */
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x1400aa71f) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x1400aa760) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+
+    /*
+     * Successful native underfoot build hook. A stronger downward velocity
+     * shortens only the landing phase. Every repeat rate, including 50/sec,
+     * caps at -50 because larger displacement can tunnel through the block.
+     */
+    c->tower_entry = c->n;
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 0);
+    byte(c, 0x74); byte(c, 0x17);
+    byte(c, 0xb8); dword(c, (int32_t)0xc2480000); /* -50.0f */
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 2);
+    byte(c, 0xb9); dword(c, (int32_t)0xc2480000); /* -50.0f safe cap */
+    byte(c, 0x0f); byte(c, 0x44); byte(c, 0xc1); /* cmove eax, ecx */
+    byte(c, 0x89); byte(c, 0x46); byte(c, 0x28); /* player vertical speed */
+    byte(c, 0x8b); byte(c, 0x0d);
+    repeat_rip32(c, UINT64_C(0x1408f1dc4));       /* original buildpoint */
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x1400aaa15) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+
+    /*
+     * Player::placeBlock normally asks findWorldCoords mode 1 for the open
+     * cell beside the hit face. Mode 2 returns the hit block itself. This
+     * hook is on the build-mode-only call site; paint already resolves to the
+     * hit block under mode 1, so its behavior remains unchanged.
+     */
+    c->replace_entry = c->n;
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPLACE_STATE_VA - next)); byte(c, 0);
+    byte(c, 0x41); byte(c, 0xb9); dword(c, 1);    /* normal: adjacent */
+    byte(c, 0x74); byte(c, 6);
+    byte(c, 0x41); byte(c, 0xb9); dword(c, 2);    /* replace: hit cell */
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x1400ab9e4) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+
+    /*
+     * The coordinate selector alone is insufficient: placeBlock normally
+     * rejects an occupied cell unless its block metadata marks it naturally
+     * replaceable (water, fire, and similar blocks). When O is active, enter
+     * the same native continuation used for an empty/replaceable cell. This
+     * retains the game's normal build, sound, multiplayer, and neighbor-update
+     * path instead of synthesizing a destroy followed by a second placement.
+     * Keep this code past the embedded flight constants at 0x1ec/0x1f0.
+     */
+    if (c->n < 0x200) c->n = 0x200;
+    c->replace_occupied_entry = c->n;
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPLACE_STATE_VA - next)); byte(c, 0);
+    byte(c, 0x75); byte(c, 15);                   /* O on -> native build path */
+    byte(c, 0xf6); byte(c, 0x04); byte(c, 0x8a); byte(c, 0x40); /* original test */
+    byte(c, 0x0f); byte(c, 0x84);
+    dword(c, (int32_t)(UINT64_C(0x1400ac34a) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x1400abd0f) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x1400abcaa) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+
+    /*
+     * findWorldCoords samples the targeting ray every 0.125 block. The stock
+     * loop limit is 120 samples (a nominal 15-block reach). Keep that limit
+     * for off/5/sec/10/sec, use 160 samples for 20/sec, and 400 for 50/sec.
+     * Preserve eax because the original compare only changed flags.
+     */
+    c->reach_entry = c->n;
+    byte(c, 0x50);                                  /* push rax */
+    byte(c, 0xb8); dword(c, 120);                   /* stock: 15 blocks */
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 3);
+    byte(c, 0x75); byte(c, 5);                     /* not 20/sec */
+    byte(c, 0xb8); dword(c, 160);                   /* 20 blocks */
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 4);
+    byte(c, 0x75); byte(c, 5);                     /* not 50/sec */
+    byte(c, 0xb8); dword(c, 400);                   /* 50 blocks */
+    byte(c, 0x39); byte(c, 0xc6);                  /* cmp esi, eax */
+    byte(c, 0x75); byte(c, 6);                     /* continue sampling */
+    byte(c, 0x58);                                  /* pop rax */
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x14011cb45) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+    byte(c, 0x58);                                  /* pop rax */
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x14011c8bf) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+
+    /*
+     * Player::move has already applied velocity to XYZ before vertc resolves
+     * block contacts. In noclip mode, return before that resolver; otherwise
+     * replay its first three pushes and continue through the original body.
+     */
+    c->noclip_entry = c->n;
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(NOCLIP_STATE_VA - next)); byte(c, 1);
+    byte(c, 0x75); byte(c, 1);                    /* disabled -> original */
+    byte(c, 0xc3);                                /* enabled -> no collision */
+    byte(c, 0x41); byte(c, 0x57);                 /* original push r15 */
+    byte(c, 0x41); byte(c, 0x56);                 /* original push r14 */
+    byte(c, 0x41); byte(c, 0x55);                 /* original push r13 */
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x1400ae716) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+
+    /*
+     * Texture2D::drawAtPoint is called with a null texture by SharedList in
+     * this build. The original function immediately reads rcx+0x14 and
+     * crashes. Treat a missing optional menu texture as a no-op.
+     */
+    c->null_texture_entry = c->n;
+    byte(c, 0x48); byte(c, 0x85); byte(c, 0xc9);       /* test rcx, rcx */
+    byte(c, 0x74); byte(c, 0x0d);                      /* null -> ret */
+    byte(c, 0x53);                                     /* original push rbx */
+    byte(c, 0x48); byte(c, 0x81); byte(c, 0xec);
+    dword(c, 0xa0);                                    /* original stack frame */
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x1400f6ed8) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+    byte(c, 0xc3);
+
+    /*
+     * Final native Terrain::buildBlock call hook. The original placement is
+     * performed first. State 1 records point A; states 3/4 use the current
+     * placement as point B and build an inclusive filled box or hollow shell.
+     * A one-dimensional selection is always a solid line. Generated cells use
+     * Terrain::buildBlock directly, which also overwrites occupied cells.
+     */
+    c->autofill_entry = c->n;
+    byte(c, 0xe8);
+    dword(c, (int32_t)(UINT64_C(0x140050a00) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 1);
+    byte(c, 0x0f); byte(c, 0x84); clear_first_dispatch = c->n; dword(c, 0);
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 3);
+    byte(c, 0x0f); byte(c, 0x84); clear_begin_dispatch = c->n; dword(c, 0);
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 1);
+    byte(c, 0x0f); byte(c, 0x85);
+    {
+        size_t not_first = c->n, filled_begin, hollow_begin, plain_return;
+        size_t abort_overflow1, abort_overflow2, abort_large;
+        size_t filled_jump, dim_jump, x_const, x_min, x_max;
+        size_t y_const, y_min, y_max, z_const, z_min, z_max;
+        size_t skip_cell, loop_z, loop_y, loop_x;
+        size_t loop, build, increment, done;
+        dword(c, 0);
+
+        byte(c, 0x89); byte(c, 0x1d);              /* point A x = ebx */
+        repeat_rip32(c, AUTOFILL_X_VA);
+        byte(c, 0x89); byte(c, 0x35);              /* point A y = esi */
+        repeat_rip32(c, AUTOFILL_Y_VA);
+        byte(c, 0x89); byte(c, 0x3d);              /* point A z = edi */
+        repeat_rip32(c, AUTOFILL_Z_VA);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 2);
+        byte(c, 0xe9);
+        dword(c, (int32_t)(UINT64_C(0x1400ac31b) -
+                           (REPEAT_CODE_VA + c->n + 4)));
+
+        local32(c, not_first, c->n);
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 3);
+        byte(c, 0x0f); byte(c, 0x84); filled_begin = c->n; dword(c, 0);
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 4);
+        byte(c, 0x0f); byte(c, 0x84); hollow_begin = c->n; dword(c, 0);
+        byte(c, 0xe9); plain_return = c->n; dword(c, 0);
+
+        local32(c, filled_begin, c->n);
+        local32(c, hollow_begin, c->n);
+        byte(c, 0x41); byte(c, 0x54);              /* preserve r12/r14/r15 */
+        byte(c, 0x41); byte(c, 0x56);
+        byte(c, 0x41); byte(c, 0x57);
+        byte(c, 0x48); byte(c, 0x83); byte(c, 0xec); byte(c, 0x48);
+
+        /* Sort A/B into inclusive min/max bounds on the stack. */
+        byte(c, 0x8b); byte(c, 0x05); repeat_rip32(c, AUTOFILL_X_VA);
+        byte(c, 0x89); byte(c, 0xd9); byte(c, 0x39); byte(c, 0xc8);
+        byte(c, 0x89); byte(c, 0xc2);
+        byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xc1);
+        byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xca);
+        byte(c, 0x89); byte(c, 0x44); byte(c, 0x24); byte(c, 0x20);
+        byte(c, 0x89); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x24);
+        byte(c, 0x8b); byte(c, 0x05); repeat_rip32(c, AUTOFILL_Y_VA);
+        byte(c, 0x89); byte(c, 0xf1); byte(c, 0x39); byte(c, 0xc8);
+        byte(c, 0x89); byte(c, 0xc2);
+        byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xc1);
+        byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xca);
+        byte(c, 0x89); byte(c, 0x44); byte(c, 0x24); byte(c, 0x28);
+        byte(c, 0x89); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x2c);
+        byte(c, 0x8b); byte(c, 0x05); repeat_rip32(c, AUTOFILL_Z_VA);
+        byte(c, 0x89); byte(c, 0xf9); byte(c, 0x39); byte(c, 0xc8);
+        byte(c, 0x89); byte(c, 0xc2);
+        byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xc1);
+        byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xca);
+        byte(c, 0x89); byte(c, 0x44); byte(c, 0x24); byte(c, 0x30);
+        byte(c, 0x89); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x34);
+
+        /* Count varying dimensions for line versus surface/shell behavior. */
+        byte(c, 0x31); byte(c, 0xc0);
+        byte(c, 0x8b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x20);
+        byte(c, 0x3b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x24);
+        byte(c, 0x0f); byte(c, 0x95); byte(c, 0xc2);
+        byte(c, 0x0f); byte(c, 0xb6); byte(c, 0xd2); byte(c, 0x01); byte(c, 0xd0);
+        byte(c, 0x8b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x28);
+        byte(c, 0x3b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x2c);
+        byte(c, 0x0f); byte(c, 0x95); byte(c, 0xc2);
+        byte(c, 0x0f); byte(c, 0xb6); byte(c, 0xd2); byte(c, 0x01); byte(c, 0xd0);
+        byte(c, 0x8b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x30);
+        byte(c, 0x3b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x34);
+        byte(c, 0x0f); byte(c, 0x95); byte(c, 0xc2);
+        byte(c, 0x0f); byte(c, 0xb6); byte(c, 0xd2); byte(c, 0x01); byte(c, 0xd0);
+        byte(c, 0x89); byte(c, 0x44); byte(c, 0x24); byte(c, 0x38);
+
+        /* Reject overflow or more than 1,048,576 candidate cells. */
+        byte(c, 0x8b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x24);
+        byte(c, 0x2b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x20); byte(c, 0xff); byte(c, 0xc1);
+        byte(c, 0x8b); byte(c, 0x44); byte(c, 0x24); byte(c, 0x2c);
+        byte(c, 0x2b); byte(c, 0x44); byte(c, 0x24); byte(c, 0x28); byte(c, 0xff); byte(c, 0xc0);
+        byte(c, 0x0f); byte(c, 0xaf); byte(c, 0xc1);
+        byte(c, 0x0f); byte(c, 0x80); abort_overflow1 = c->n; dword(c, 0);
+        byte(c, 0x8b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x34);
+        byte(c, 0x2b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x30); byte(c, 0xff); byte(c, 0xc1);
+        byte(c, 0x0f); byte(c, 0xaf); byte(c, 0xc1);
+        byte(c, 0x0f); byte(c, 0x80); abort_overflow2 = c->n; dword(c, 0);
+        byte(c, 0x3d); dword(c, 1048576);
+        byte(c, 0x0f); byte(c, 0x87); abort_large = c->n; dword(c, 0);
+
+        byte(c, 0x44); byte(c, 0x8b); byte(c, 0x64); byte(c, 0x24); byte(c, 0x20);
+        byte(c, 0x44); byte(c, 0x8b); byte(c, 0x74); byte(c, 0x24); byte(c, 0x28);
+        byte(c, 0x44); byte(c, 0x8b); byte(c, 0x7c); byte(c, 0x24); byte(c, 0x30);
+
+        loop = c->n;
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 4);
+        byte(c, 0x0f); byte(c, 0x85); filled_jump = c->n; dword(c, 0);
+        byte(c, 0x83); byte(c, 0x7c); byte(c, 0x24); byte(c, 0x38); byte(c, 2);
+        byte(c, 0x0f); byte(c, 0x8c); dim_jump = c->n; dword(c, 0);
+
+        byte(c, 0x8b); byte(c, 0x44); byte(c, 0x24); byte(c, 0x20);
+        byte(c, 0x3b); byte(c, 0x44); byte(c, 0x24); byte(c, 0x24);
+        byte(c, 0x0f); byte(c, 0x84); x_const = c->n; dword(c, 0);
+        byte(c, 0x44); byte(c, 0x39); byte(c, 0xe0);
+        byte(c, 0x0f); byte(c, 0x84); x_min = c->n; dword(c, 0);
+        byte(c, 0x44); byte(c, 0x3b); byte(c, 0x64); byte(c, 0x24); byte(c, 0x24);
+        byte(c, 0x0f); byte(c, 0x84); x_max = c->n; dword(c, 0);
+        local32(c, x_const, c->n);
+        byte(c, 0x8b); byte(c, 0x44); byte(c, 0x24); byte(c, 0x28);
+        byte(c, 0x3b); byte(c, 0x44); byte(c, 0x24); byte(c, 0x2c);
+        byte(c, 0x0f); byte(c, 0x84); y_const = c->n; dword(c, 0);
+        byte(c, 0x44); byte(c, 0x39); byte(c, 0xf0);
+        byte(c, 0x0f); byte(c, 0x84); y_min = c->n; dword(c, 0);
+        byte(c, 0x44); byte(c, 0x3b); byte(c, 0x74); byte(c, 0x24); byte(c, 0x2c);
+        byte(c, 0x0f); byte(c, 0x84); y_max = c->n; dword(c, 0);
+        local32(c, y_const, c->n);
+        byte(c, 0x8b); byte(c, 0x44); byte(c, 0x24); byte(c, 0x30);
+        byte(c, 0x3b); byte(c, 0x44); byte(c, 0x24); byte(c, 0x34);
+        byte(c, 0x0f); byte(c, 0x84); z_const = c->n; dword(c, 0);
+        byte(c, 0x44); byte(c, 0x39); byte(c, 0xf8);
+        byte(c, 0x0f); byte(c, 0x84); z_min = c->n; dword(c, 0);
+        byte(c, 0x44); byte(c, 0x3b); byte(c, 0x7c); byte(c, 0x24); byte(c, 0x34);
+        byte(c, 0x0f); byte(c, 0x84); z_max = c->n; dword(c, 0);
+        byte(c, 0xe9); skip_cell = c->n; dword(c, 0);
+
+        build = c->n;
+        local32(c, filled_jump, build); local32(c, dim_jump, build);
+        local32(c, x_min, build); local32(c, x_max, build);
+        local32(c, y_min, build); local32(c, y_max, build);
+        local32(c, z_min, build); local32(c, z_max, build);
+        byte(c, 0x49); byte(c, 0x8b); byte(c, 0x45); byte(c, 0x00);
+        byte(c, 0x48); byte(c, 0x8b); byte(c, 0x08);
+        byte(c, 0x44); byte(c, 0x89); byte(c, 0xe2);
+        byte(c, 0x45); byte(c, 0x89); byte(c, 0xf0);
+        byte(c, 0x45); byte(c, 0x89); byte(c, 0xf9);
+        byte(c, 0xe8);
+        dword(c, (int32_t)(UINT64_C(0x140050a00) -
+                           (REPEAT_CODE_VA + c->n + 4)));
+
+        increment = c->n;
+        local32(c, skip_cell, increment);
+        local32(c, z_const, increment);
+        byte(c, 0x41); byte(c, 0xff); byte(c, 0xc7);
+        byte(c, 0x44); byte(c, 0x3b); byte(c, 0x7c); byte(c, 0x24); byte(c, 0x34);
+        byte(c, 0x0f); byte(c, 0x8e); loop_z = c->n; dword(c, 0);
+        byte(c, 0x44); byte(c, 0x8b); byte(c, 0x7c); byte(c, 0x24); byte(c, 0x30);
+        byte(c, 0x41); byte(c, 0xff); byte(c, 0xc6);
+        byte(c, 0x44); byte(c, 0x3b); byte(c, 0x74); byte(c, 0x24); byte(c, 0x2c);
+        byte(c, 0x0f); byte(c, 0x8e); loop_y = c->n; dword(c, 0);
+        byte(c, 0x44); byte(c, 0x8b); byte(c, 0x74); byte(c, 0x24); byte(c, 0x28);
+        byte(c, 0x41); byte(c, 0xff); byte(c, 0xc4);
+        byte(c, 0x44); byte(c, 0x3b); byte(c, 0x64); byte(c, 0x24); byte(c, 0x24);
+        byte(c, 0x0f); byte(c, 0x8e); loop_x = c->n; dword(c, 0);
+
+        done = c->n;
+        local32(c, abort_overflow1, done); local32(c, abort_overflow2, done);
+        local32(c, abort_large, done); local32(c, loop_z, loop);
+        local32(c, loop_y, loop); local32(c, loop_x, loop);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(AUTOFILL_STATE_VA - next)); byte(c, 0);
+        byte(c, 0x48); byte(c, 0x83); byte(c, 0xc4); byte(c, 0x48);
+        byte(c, 0x41); byte(c, 0x5f); byte(c, 0x41); byte(c, 0x5e); byte(c, 0x41); byte(c, 0x5c);
+        byte(c, 0xe9);
+        dword(c, (int32_t)(UINT64_C(0x1400ac31b) -
+                           (REPEAT_CODE_VA + c->n + 4)));
+
+        local32(c, plain_return, c->n);
+        byte(c, 0xe9);
+        dword(c, (int32_t)(UINT64_C(0x1400ac31b) -
+                           (REPEAT_CODE_VA + c->n + 4)));
+    }
+
+    /* Record clear point A after its marker block has been placed. */
+    local32(c, clear_first_dispatch, c->n);
+    byte(c, 0x89); byte(c, 0x1d); repeat_rip32(c, CLEAR_X_VA);
+    byte(c, 0x89); byte(c, 0x35); repeat_rip32(c, CLEAR_Y_VA);
+    byte(c, 0x89); byte(c, 0x3d); repeat_rip32(c, CLEAR_Z_VA);
+    byte(c, 0xc6); byte(c, 0x05);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 2);
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x1400ac31b) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+
+    /* Clear the inclusive A/B cuboid through Terrain::destroyBlock. */
+    local32(c, clear_begin_dispatch, c->n);
+    {
+        size_t abort1, abort2, abort_large, loop_z, loop_y, loop_x;
+        size_t loop, done;
+        byte(c, 0x41); byte(c, 0x54);
+        byte(c, 0x41); byte(c, 0x56);
+        byte(c, 0x41); byte(c, 0x57);
+        byte(c, 0x48); byte(c, 0x83); byte(c, 0xec); byte(c, 0x48);
+
+        byte(c, 0x8b); byte(c, 0x05); repeat_rip32(c, CLEAR_X_VA);
+        byte(c, 0x89); byte(c, 0xd9); byte(c, 0x39); byte(c, 0xc8); byte(c, 0x89); byte(c, 0xc2);
+        byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xc1); byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xca);
+        byte(c, 0x89); byte(c, 0x44); byte(c, 0x24); byte(c, 0x20);
+        byte(c, 0x89); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x24);
+        byte(c, 0x8b); byte(c, 0x05); repeat_rip32(c, CLEAR_Y_VA);
+        byte(c, 0x89); byte(c, 0xf1); byte(c, 0x39); byte(c, 0xc8); byte(c, 0x89); byte(c, 0xc2);
+        byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xc1); byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xca);
+        byte(c, 0x89); byte(c, 0x44); byte(c, 0x24); byte(c, 0x28);
+        byte(c, 0x89); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x2c);
+        byte(c, 0x8b); byte(c, 0x05); repeat_rip32(c, CLEAR_Z_VA);
+        byte(c, 0x89); byte(c, 0xf9); byte(c, 0x39); byte(c, 0xc8); byte(c, 0x89); byte(c, 0xc2);
+        byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xc1); byte(c, 0x0f); byte(c, 0x4f); byte(c, 0xca);
+        byte(c, 0x89); byte(c, 0x44); byte(c, 0x24); byte(c, 0x30);
+        byte(c, 0x89); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x34);
+
+        byte(c, 0x8b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x24);
+        byte(c, 0x2b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x20); byte(c, 0xff); byte(c, 0xc1);
+        byte(c, 0x8b); byte(c, 0x44); byte(c, 0x24); byte(c, 0x2c);
+        byte(c, 0x2b); byte(c, 0x44); byte(c, 0x24); byte(c, 0x28); byte(c, 0xff); byte(c, 0xc0);
+        byte(c, 0x0f); byte(c, 0xaf); byte(c, 0xc1);
+        byte(c, 0x0f); byte(c, 0x80); abort1 = c->n; dword(c, 0);
+        byte(c, 0x8b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x34);
+        byte(c, 0x2b); byte(c, 0x4c); byte(c, 0x24); byte(c, 0x30); byte(c, 0xff); byte(c, 0xc1);
+        byte(c, 0x0f); byte(c, 0xaf); byte(c, 0xc1);
+        byte(c, 0x0f); byte(c, 0x80); abort2 = c->n; dword(c, 0);
+        byte(c, 0x3d); dword(c, 1048576);
+        byte(c, 0x0f); byte(c, 0x87); abort_large = c->n; dword(c, 0);
+
+        byte(c, 0x44); byte(c, 0x8b); byte(c, 0x64); byte(c, 0x24); byte(c, 0x20);
+        byte(c, 0x44); byte(c, 0x8b); byte(c, 0x74); byte(c, 0x24); byte(c, 0x28);
+        byte(c, 0x44); byte(c, 0x8b); byte(c, 0x7c); byte(c, 0x24); byte(c, 0x30);
+        loop = c->n;
+        byte(c, 0x49); byte(c, 0x8b); byte(c, 0x45); byte(c, 0x00);
+        byte(c, 0x48); byte(c, 0x8b); byte(c, 0x08);
+        byte(c, 0x44); byte(c, 0x89); byte(c, 0xe2);
+        byte(c, 0x45); byte(c, 0x89); byte(c, 0xf0);
+        byte(c, 0x45); byte(c, 0x89); byte(c, 0xf9);
+        byte(c, 0xe8);
+        dword(c, (int32_t)(UINT64_C(0x14004ce90) -
+                           (REPEAT_CODE_VA + c->n + 4)));
+        byte(c, 0x41); byte(c, 0xff); byte(c, 0xc7);
+        byte(c, 0x44); byte(c, 0x3b); byte(c, 0x7c); byte(c, 0x24); byte(c, 0x34);
+        byte(c, 0x0f); byte(c, 0x8e); loop_z = c->n; dword(c, 0);
+        byte(c, 0x44); byte(c, 0x8b); byte(c, 0x7c); byte(c, 0x24); byte(c, 0x30);
+        byte(c, 0x41); byte(c, 0xff); byte(c, 0xc6);
+        byte(c, 0x44); byte(c, 0x3b); byte(c, 0x74); byte(c, 0x24); byte(c, 0x2c);
+        byte(c, 0x0f); byte(c, 0x8e); loop_y = c->n; dword(c, 0);
+        byte(c, 0x44); byte(c, 0x8b); byte(c, 0x74); byte(c, 0x24); byte(c, 0x28);
+        byte(c, 0x41); byte(c, 0xff); byte(c, 0xc4);
+        byte(c, 0x44); byte(c, 0x3b); byte(c, 0x64); byte(c, 0x24); byte(c, 0x24);
+        byte(c, 0x0f); byte(c, 0x8e); loop_x = c->n; dword(c, 0);
+
+        done = c->n;
+        local32(c, abort1, done); local32(c, abort2, done); local32(c, abort_large, done);
+        local32(c, loop_z, loop); local32(c, loop_y, loop); local32(c, loop_x, loop);
+        byte(c, 0xc6); byte(c, 0x05);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(CLEAR_STATE_VA - next)); byte(c, 0);
+        byte(c, 0x48); byte(c, 0x83); byte(c, 0xc4); byte(c, 0x48);
+        byte(c, 0x41); byte(c, 0x5f); byte(c, 0x41); byte(c, 0x5e); byte(c, 0x41); byte(c, 0x5c);
+        byte(c, 0xe9);
+        dword(c, (int32_t)(UINT64_C(0x1400ac31b) -
+                           (REPEAT_CODE_VA + c->n + 4)));
+    }
+    return c->n < 0x7c0;
+}
+
+static void hud_rel32(Code *c, uint64_t target) {
+    uint64_t next = HUD_CODE_VA + c->n + 4;
+    dword(c, (int32_t)(target - next));
+}
+
+static void hud_float(Code *c, unsigned xmm, float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    byte(c, 0xb8); dword(c, (int32_t)bits);       /* mov eax, imm32 */
+    byte(c, 0x66); byte(c, 0x0f); byte(c, 0x6e);
+    byte(c, 0xc0 | ((xmm & 7) << 3));             /* movd xmmN, eax */
+}
+
+static void hud_call(Code *c, uint64_t target) {
+    byte(c, 0xe8); hud_rel32(c, target);
+}
+
+static void hud_gl_cap(Code *c, unsigned capability, uint64_t function) {
+    byte(c, 0xb9); dword(c, (int32_t)capability); /* mov ecx, capability */
+    hud_call(c, function);
+}
+
+static void hud_color(Code *c, float r, float g, float b) {
+    hud_float(c, 0, r); hud_float(c, 1, g);
+    hud_float(c, 2, b); hud_float(c, 3, 1.0f);
+    hud_call(c, UINT64_C(0x1400125c0));           /* glColor4f */
+}
+
+static void hud_rect(Code *c, float x, float y, float w, float h) {
+    hud_float(c, 0, x); hud_float(c, 1, y);
+    hud_float(c, 2, w); hud_float(c, 3, h);
+    hud_call(c, UINT64_C(0x1400ceca0));           /* Graphics::drawRect */
+}
+
+static size_t hud_skip_if_zero(Code *c, uint64_t state) {
+    byte(c, 0x80); byte(c, 0x3d);
+    {
+        uint64_t next = HUD_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(state - next));
+    }
+    byte(c, 0);
+    byte(c, 0x0f); byte(c, 0x84);
+    {
+        size_t displacement = c->n;
+        dword(c, 0);
+        return displacement;
+    }
+}
+
+static void hud_finish_skip(Code *c, size_t displacement) {
+    int32_t rel = (int32_t)(c->n - (displacement + 4));
+    memcpy(c->b + displacement, &rel, sizeof rel);
+}
+
+static int build_hud_payload(Code *c) {
+    size_t skip_hud, skip_f, skip_n, skip_p, skip_o, skip_fill, skip_clear;
+    size_t state2_jump, state3_jump, state4_jump;
+    size_t color_done1, color_done2, color_done3;
+    size_t original_epilogue;
+    memset(c, 0, sizeof *c);
+    byte(c, 0x80); byte(c, 0x3d);                 /* gameplay capture only */
+    {
+        uint64_t next = HUD_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(UINT64_C(0x1403128b0) - next));
+    }
+    byte(c, 1);
+    byte(c, 0x0f); byte(c, 0x85); skip_hud = c->n; dword(c, 0);
+    byte(c, 0x48); byte(c, 0x83); byte(c, 0xec); byte(c, 0x20);
+    hud_call(c, UINT64_C(0x1400ceaa0));           /* Graphics::beginHud */
+    /*
+     * HUD renderers leave culling and the per-vertex color array enabled.
+     * Culling removes one triangle from drawRect's two-triangle strip, while
+     * the stale color array overrides our alpha. Draw this pass with neither,
+     * Disable texturing too, so a stale bound texture cannot modulate the
+     * requested solid color to black. Alpha remains exactly 1.0.
+     */
+    hud_gl_cap(c, 0x0b44, UINT64_C(0x140012770)); /* GL_CULL_FACE off */
+    hud_gl_cap(c, 0x8076, UINT64_C(0x140012820)); /* GL_COLOR_ARRAY off */
+    hud_gl_cap(c, 0x0de1, UINT64_C(0x140012770)); /* GL_TEXTURE_2D off */
+
+    skip_f = hud_skip_if_zero(c, FLY_MODE);
+    hud_color(c, 0.10f, 0.90f, 0.10f);
+    hud_rect(c, 4, 4, 22, 22);
+    hud_finish_skip(c, skip_f);
+
+    skip_n = hud_skip_if_zero(c, NOCLIP_STATE_VA);
+    hud_color(c, 0.95f, 0.08f, 0.08f);
+    hud_rect(c, 27, 4, 45, 22);
+    hud_finish_skip(c, skip_n);
+
+    skip_p = hud_skip_if_zero(c, REPEAT_STATE_VA);
+    /* 5/sec bright blue, 10/sec deep blue, 20/sec orange, 50/sec deep red. */
+    byte(c, 0x80); byte(c, 0x3d);
+    {
+        uint64_t next = HUD_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(REPEAT_STATE_VA - next));
+    }
+    byte(c, 2);
+    byte(c, 0x0f); byte(c, 0x84); state2_jump = c->n; dword(c, 0);
+    byte(c, 0x80); byte(c, 0x3d);
+    {
+        uint64_t next = HUD_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(REPEAT_STATE_VA - next));
+    }
+    byte(c, 3);
+    byte(c, 0x0f); byte(c, 0x84); state3_jump = c->n; dword(c, 0);
+    byte(c, 0x80); byte(c, 0x3d);
+    {
+        uint64_t next = HUD_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(REPEAT_STATE_VA - next));
+    }
+    byte(c, 4);
+    byte(c, 0x0f); byte(c, 0x84); state4_jump = c->n; dword(c, 0);
+    hud_color(c, 0.10f, 0.55f, 1.00f);
+    byte(c, 0xe9); color_done1 = c->n; dword(c, 0);
+    {
+        int32_t rel = (int32_t)(c->n - (state2_jump + 4));
+        memcpy(c->b + state2_jump, &rel, sizeof rel);
+    }
+    hud_color(c, 0.05f, 0.18f, 0.80f);
+    byte(c, 0xe9); color_done2 = c->n; dword(c, 0);
+    {
+        int32_t rel = (int32_t)(c->n - (state3_jump + 4));
+        memcpy(c->b + state3_jump, &rel, sizeof rel);
+    }
+    hud_color(c, 1.0f, 0.42f, 0.02f);
+    byte(c, 0xe9); color_done3 = c->n; dword(c, 0);
+    {
+        int32_t rel = (int32_t)(c->n - (state4_jump + 4));
+        memcpy(c->b + state4_jump, &rel, sizeof rel);
+    }
+    hud_color(c, 0.65f, 0.02f, 0.02f);
+    {
+        int32_t rel = (int32_t)(c->n - (color_done1 + 4));
+        memcpy(c->b + color_done1, &rel, sizeof rel);
+        rel = (int32_t)(c->n - (color_done2 + 4));
+        memcpy(c->b + color_done2, &rel, sizeof rel);
+        rel = (int32_t)(c->n - (color_done3 + 4));
+        memcpy(c->b + color_done3, &rel, sizeof rel);
+    }
+    hud_rect(c, 50, 4, 68, 22);
+    hud_finish_skip(c, skip_p);
+
+    skip_o = hud_skip_if_zero(c, REPLACE_STATE_VA);
+    hud_color(c, 1.00f, 0.05f, 0.55f);           /* vibrant pink */
+    hud_rect(c, 73, 4, 91, 22);
+    hud_finish_skip(c, skip_o);
+
+    skip_fill = hud_skip_if_zero(c, AUTOFILL_STATE_VA);
+    {
+        size_t orange_jump, color_done;
+        byte(c, 0x80); byte(c, 0x3d);
+        {
+            uint64_t next = HUD_CODE_VA + c->n + 5;
+            dword(c, (int32_t)(AUTOFILL_STATE_VA - next));
+        }
+        byte(c, 2);                                /* waiting after point A */
+        byte(c, 0x0f); byte(c, 0x84); orange_jump = c->n; dword(c, 0);
+        hud_color(c, 1.00f, 0.92f, 0.02f);         /* armed: vivid yellow */
+        byte(c, 0xe9); color_done = c->n; dword(c, 0);
+        local32(c, orange_jump, c->n);
+        hud_color(c, 1.00f, 0.38f, 0.01f);         /* point A set: orange */
+        local32(c, color_done, c->n);
+    }
+    hud_rect(c, 96, 4, 114, 22);
+    hud_finish_skip(c, skip_fill);
+
+    skip_clear = hud_skip_if_zero(c, CLEAR_STATE_VA);
+    {
+        size_t orange_jump, color_done;
+        byte(c, 0x80); byte(c, 0x3d);
+        {
+            uint64_t next = HUD_CODE_VA + c->n + 5;
+            dword(c, (int32_t)(CLEAR_STATE_VA - next));
+        }
+        byte(c, 2);
+        byte(c, 0x0f); byte(c, 0x84); orange_jump = c->n; dword(c, 0);
+        hud_color(c, 0.30f, 0.00f, 0.00f);         /* armed: very deep red */
+        byte(c, 0xe9); color_done = c->n; dword(c, 0);
+        local32(c, orange_jump, c->n);
+        hud_color(c, 0.38f, 0.16f, 0.03f);         /* point A set: brown */
+        local32(c, color_done, c->n);
+    }
+    hud_rect(c, 119, 4, 137, 22);
+    hud_finish_skip(c, skip_clear);
+
+    hud_gl_cap(c, 0x8076, UINT64_C(0x1400127b0)); /* restore color array */
+    hud_gl_cap(c, 0x0de1, UINT64_C(0x1400126f0)); /* restore texturing */
+    hud_gl_cap(c, 0x0b44, UINT64_C(0x1400126f0)); /* restore face culling */
+    hud_call(c, UINT64_C(0x1400cea40));           /* Graphics::endHud */
+    byte(c, 0x48); byte(c, 0x83); byte(c, 0xc4); byte(c, 0x20);
+    original_epilogue = c->n;
+    {
+        int32_t rel = (int32_t)(original_epilogue - (skip_hud + 4));
+        memcpy(c->b + skip_hud, &rel, sizeof rel);
+    }
+    /* Original Hud::render epilogue replaced by the hook. */
+    byte(c, 0x48); byte(c, 0x81); byte(c, 0xc4); dword(c, 0x1d0);
+    byte(c, 0x5b); byte(c, 0x5d); byte(c, 0x5f); byte(c, 0x5e);
+    byte(c, 0x41); byte(c, 0x5c);
+    byte(c, 0x41); byte(c, 0x5e);
+    byte(c, 0x41); byte(c, 0x5f);
+    byte(c, 0xc3);
+    return c->n < 0xe00;
+}
+
+static int copy_file(const char *src, const char *dst) {
+    unsigned char buffer[65536];
+    size_t n;
+    FILE *in = fopen(src, "rb");
+    FILE *out;
+    if (!in) return 0;
+    out = fopen(dst, "wb");
+    if (!out) { fclose(in); return 0; }
+    while ((n = fread(buffer, 1, sizeof buffer, in)) != 0)
+        if (fwrite(buffer, 1, n, out) != n) {
+            fclose(in); fclose(out); return 0;
+        }
+    if (ferror(in)) { fclose(in); fclose(out); return 0; }
+    return fclose(in) == 0 && fclose(out) == 0;
+}
+
+static void put32(unsigned char *p, uint32_t v) {
+    memcpy(p, &v, sizeof v);
+}
+
+int main(int argc, char **argv) {
+    static const unsigned char expected_update[] =
+        {0x41,0x57,0x41,0x56,0x41,0x55};
+    static const unsigned char expected_vertical_add[] =
+        {0xf3,0x0f,0x11,0x47,0x28};
+    static const unsigned char expected_vertical_branch[] = {0x75,0x1c};
+    static const unsigned char expected_vertical_store[] =
+        {0xf3,0x0f,0x11,0x47,0x28};
+    static const unsigned char expected_repeat_hook[] =
+        {0x0f,0xb6,0x05,0x15,0xe6,0x30,0x00};
+    static const unsigned char expected_bedrock_hook[] =
+        {0x41,0x83,0xfc,0x01,0x0f,0x84,0x61,0x0a,0x00,0x00};
+    static const unsigned char expected_bedrock_level_hook[] =
+        {0x83,0xf8,0x03,0x0f,0x8e,0xec,0xfe,0xff,0xff};
+    static const unsigned char expected_tower_hook[] =
+        {0x8b,0x0d,0xaf,0x73,0x84,0x00};
+    static const unsigned char expected_replace_hook[] =
+        {0x41,0xb9,0x01,0x00,0x00,0x00};
+    static const unsigned char expected_replace_occupied_hook[] =
+        {0xf6,0x04,0x8a,0x40,0x0f,0x84,0x3b,0x06,0x00,0x00};
+    static const unsigned char expected_autofill_build_hook[] =
+        {0xe8,0xe5,0x46,0xfa,0xff};
+    static const unsigned char expected_reach_hook[] =
+        {0x83,0xfe,0x78,0x0f,0x84,0x86,0x02,0x00,0x00};
+    static const unsigned char expected_noclip_hook[] =
+        {0x41,0x57,0x41,0x56,0x41,0x55};
+    static const unsigned char expected_hud_hook[] =
+        {0x48,0x81,0xc4,0xd0,0x01,0x00,0x00};
+    static const unsigned char expected_null_texture_hook[] =
+        {0x53,0x48,0x81,0xec,0xa0,0x00,0x00,0x00};
+    unsigned char check[6], hook[6] = {0xe9,0,0,0,0,0x90};
+    unsigned char vertical_add[5], vertical_branch[2];
+    unsigned char vertical_store[5];
+    unsigned char repeat_hook[7], section_header[40], section_data[8192];
+    unsigned char bedrock_hook[10], bedrock_level_hook[9], tower_hook[6];
+    unsigned char replace_hook[6], replace_occupied_hook[10], reach_hook[9];
+    unsigned char autofill_build_hook[5];
+    unsigned char noclip_hook[6];
+    unsigned char hud_hook[7];
+    unsigned char null_texture_hook[8], stream_threshold[7];
+    unsigned char stream_emergency[7];
+    uint32_t speed_words[2], y_speed_words[2], fly_drag_word;
+    uint32_t size_of_image;
+    uint16_t section_count;
+    const char *src, *dst;
+    FILE *fp;
+    long size;
+    Code code, repeat_code, hud_code;
+    int32_t rel;
+    int streaming = 1;
+
+    if (argc < 2 || argc > 4) {
+        puts("Usage: eden-mod.exe <original Eden.exe> [output.exe] [--streaming]");
+        puts("The input is never modified.");
+        return 1;
+    }
+    if (argc == 4) {
+        if (strcmp(argv[3], "--streaming") != 0) {
+            puts("Unknown option; the only supported option is --streaming.");
+            return 1;
+        }
+        streaming = 1;
+    }
+    src = argv[1];
+    dst = argc >= 3 ? argv[2] : "Eden - With Flying.exe";
+    if (strcmp(src, dst) == 0) {
+        puts("Refusing to overwrite the input file; choose a different output.");
+        return 1;
+    }
+
+    fp = fopen(src, "rb");
+    if (!fp) { fprintf(stderr, "Cannot open input: %s\n", src); return 1; }
+    fseek(fp, 0, SEEK_END); size = ftell(fp);
+    if (size != EXPECTED_SIZE) {
+        fprintf(stderr, "Unsupported Eden binary (size %ld, expected %d).\n",
+                size, EXPECTED_SIZE);
+        fclose(fp); return 1;
+    }
+    fseek(fp, UPDATE_OFF, SEEK_SET); fread(check, 1, sizeof check, fp);
+    if (memcmp(check, expected_update, sizeof check) != 0) {
+        puts("Unsupported or already-patched Player::update signature.");
+        fclose(fp); return 1;
+    }
+    fseek(fp, FLY_XZ_SPEED_OFF, SEEK_SET);
+    fread(speed_words, 1, sizeof speed_words, fp);
+    fseek(fp, FLY_DRAG_OFF, SEEK_SET);
+    fread(&fly_drag_word, 1, sizeof fly_drag_word, fp);
+    fseek(fp, FLY_Y_SPEED_OFF, SEEK_SET);
+    fread(y_speed_words, 1, sizeof y_speed_words, fp);
+    fseek(fp, VERTICAL_ADD_OFF, SEEK_SET);
+    fread(vertical_add, 1, sizeof vertical_add, fp);
+    fseek(fp, VERTICAL_STORE_BRANCH_OFF, SEEK_SET);
+    fread(vertical_branch, 1, sizeof vertical_branch, fp);
+    fseek(fp, VERTICAL_STORE_OFF, SEEK_SET);
+    fread(vertical_store, 1, sizeof vertical_store, fp);
+    fseek(fp, REPEAT_HOOK_OFF, SEEK_SET);
+    fread(repeat_hook, 1, sizeof repeat_hook, fp);
+    fseek(fp, BEDROCK_HOOK_OFF, SEEK_SET);
+    fread(bedrock_hook, 1, sizeof bedrock_hook, fp);
+    fseek(fp, BEDROCK_LEVEL_HOOK_OFF, SEEK_SET);
+    fread(bedrock_level_hook, 1, sizeof bedrock_level_hook, fp);
+    fseek(fp, TOWER_HOOK_OFF, SEEK_SET);
+    fread(tower_hook, 1, sizeof tower_hook, fp);
+    fseek(fp, REPLACE_HOOK_OFF, SEEK_SET);
+    fread(replace_hook, 1, sizeof replace_hook, fp);
+    fseek(fp, REPLACE_OCCUPIED_HOOK_OFF, SEEK_SET);
+    fread(replace_occupied_hook, 1, sizeof replace_occupied_hook, fp);
+    fseek(fp, AUTOFILL_BUILD_HOOK_OFF, SEEK_SET);
+    fread(autofill_build_hook, 1, sizeof autofill_build_hook, fp);
+    fseek(fp, REACH_HOOK_OFF, SEEK_SET);
+    fread(reach_hook, 1, sizeof reach_hook, fp);
+    fseek(fp, NOCLIP_HOOK_OFF, SEEK_SET);
+    fread(noclip_hook, 1, sizeof noclip_hook, fp);
+    fseek(fp, HUD_HOOK_OFF, SEEK_SET);
+    fread(hud_hook, 1, sizeof hud_hook, fp);
+    fseek(fp, NULL_TEXTURE_HOOK_OFF, SEEK_SET);
+    fread(null_texture_hook, 1, sizeof null_texture_hook, fp);
+    fseek(fp, STREAM_THRESHOLD_OFF, SEEK_SET);
+    fread(stream_threshold, 1, sizeof stream_threshold, fp);
+    fseek(fp, STREAM_EMERGENCY_OFF, SEEK_SET);
+    fread(stream_emergency, 1, sizeof stream_emergency, fp);
+    fseek(fp, 0x7e, SEEK_SET);
+    fread(&section_count, 1, sizeof section_count, fp);
+    fseek(fp, 0xc8, SEEK_SET);
+    fread(&size_of_image, 1, sizeof size_of_image, fp);
+    fclose(fp);
+    if (speed_words[0] != 0x41200000 || speed_words[1] != 0x41200000) {
+        puts("Unexpected horizontal flight-speed constants; refusing to patch.");
+        return 1;
+    }
+    if (fly_drag_word != 0x3f7eb852) {
+        puts("Unexpected flight drag constant; refusing to patch.");
+        return 1;
+    }
+    if (y_speed_words[0] != 0x41a0cccc ||
+        y_speed_words[1] != 0xc1a0cccc) {
+        puts("Unexpected vertical flight-speed constants; refusing to patch.");
+        return 1;
+    }
+    if (memcmp(vertical_add, expected_vertical_add,
+               sizeof expected_vertical_add) != 0 ||
+        memcmp(vertical_branch, expected_vertical_branch,
+               sizeof expected_vertical_branch) != 0 ||
+        memcmp(vertical_store, expected_vertical_store,
+               sizeof expected_vertical_store) != 0) {
+        puts("Unexpected vertical-flight instructions; refusing to patch.");
+        return 1;
+    }
+    if (memcmp(repeat_hook, expected_repeat_hook,
+               sizeof expected_repeat_hook) != 0 ||
+        memcmp(bedrock_hook, expected_bedrock_hook,
+               sizeof expected_bedrock_hook) != 0 ||
+        memcmp(bedrock_level_hook, expected_bedrock_level_hook,
+               sizeof expected_bedrock_level_hook) != 0 ||
+        memcmp(tower_hook, expected_tower_hook,
+               sizeof expected_tower_hook) != 0 ||
+        memcmp(replace_hook, expected_replace_hook,
+               sizeof expected_replace_hook) != 0 ||
+        memcmp(replace_occupied_hook, expected_replace_occupied_hook,
+               sizeof expected_replace_occupied_hook) != 0 ||
+        memcmp(autofill_build_hook, expected_autofill_build_hook,
+               sizeof expected_autofill_build_hook) != 0 ||
+        memcmp(reach_hook, expected_reach_hook,
+               sizeof expected_reach_hook) != 0 ||
+        memcmp(noclip_hook, expected_noclip_hook,
+               sizeof expected_noclip_hook) != 0 ||
+        memcmp(hud_hook, expected_hud_hook,
+               sizeof expected_hud_hook) != 0 ||
+        memcmp(null_texture_hook, expected_null_texture_hook,
+               sizeof expected_null_texture_hook) != 0 ||
+        section_count != 8 || size_of_image != 0x46c3000) {
+        puts("Unexpected PE/input-hook layout; refusing repeat-mode patch.");
+        return 1;
+    }
+    if (streaming) {
+        static const unsigned char expected_stream_threshold[] =
+            {0x41,0x81,0xfc,0x8c,0x00,0x00,0x00};
+        static const unsigned char expected_stream_emergency[] =
+            {0x41,0x81,0xfc,0x2d,0x01,0x00,0x00};
+        if (memcmp(stream_threshold, expected_stream_threshold,
+                   sizeof expected_stream_threshold) != 0 ||
+            memcmp(stream_emergency, expected_stream_emergency,
+                   sizeof expected_stream_emergency) != 0) {
+            puts("Unexpected terrain-streaming signature; refusing patch.");
+            return 1;
+        }
+    }
+    if (!build_payload(&code)) {
+        puts("Internal error: flight payload is too large.");
+        return 1;
+    }
+    if (!build_repeat_payload(&repeat_code)) {
+        puts("Internal error: repeat-mode payload is too large.");
+        return 1;
+    }
+    if (!build_hud_payload(&hud_code)) {
+        puts("Internal error: HUD indicator payload is too large.");
+        return 1;
+    }
+    if (!copy_file(src, dst)) {
+        fprintf(stderr, "Could not create output: %s\n", dst);
+        return 1;
+    }
+
+    fp = fopen(dst, "r+b");
+    if (!fp) { fprintf(stderr, "Could not patch output: %s\n", dst); return 1; }
+
+    /* Add an isolated executable section for the unrelated repeat-input hook. */
+    memset(section_header, 0, sizeof section_header);
+    memcpy(section_header, ".repeat", 7);
+    put32(section_header + 8,  0x2000);     /* VirtualSize */
+    put32(section_header + 12, 0x46c3000);  /* VirtualAddress */
+    put32(section_header + 16, 0x2000);     /* SizeOfRawData */
+    put32(section_header + 20, NEW_SECTION_RAW_OFF);
+    /*
+     * The section contains both code and the repeat state/timestamp at
+     * offsets 0x3e0/0x3e4, so it must be writable as well as executable.
+     */
+    put32(section_header + 36, 0xe0000020); /* code, execute, read, write */
+    memset(section_data, 0xcc, sizeof section_data);
+    memcpy(section_data, repeat_code.b, repeat_code.n);
+    memcpy(section_data + 0x800, hud_code.b, hud_code.n);
+    memcpy(section_data + 0x1000, code.b, code.n);
+    section_data[0x7e0] = 0;                /* repeat mode defaults off */
+    memset(section_data + 0x7e4, 0, 4);      /* last repeat timestamp */
+    section_data[0x7e8] = 0;                /* bedrock breaking defaults off */
+    section_data[0x7e9] = 0;                /* noclip defaults off */
+    section_data[0x7ea] = 0;                /* replace mode defaults off */
+    section_data[0x7eb] = 0;                /* auto-fill defaults off */
+    memset(section_data + 0x7ec, 0, 12);     /* point A coordinates */
+    section_data[0x7c0] = 0;                /* clear mode defaults off */
+    memset(section_data + 0x7c4, 0, 12);     /* clear point A coordinates */
+    put32(section_data + 0x7d4, 0x3f4ccccd); /* horizontal coast: 0.8 */
+    put32(section_data + 0x7d8, 0x3f7851ec); /* vertical coast: 0.97 */
+    section_count = 9;
+    size_of_image = 0x46c5000;
+    fseek(fp, NEW_SECTION_HEADER_OFF, SEEK_SET);
+    if (fwrite(section_header, 1, sizeof section_header, fp) !=
+        sizeof section_header) {
+        fclose(fp); puts("Failed while adding repeat-mode section."); return 1;
+    }
+    fseek(fp, 0x7e, SEEK_SET);
+    fwrite(&section_count, 1, sizeof section_count, fp);
+    fseek(fp, 0xc8, SEEK_SET);
+    fwrite(&size_of_image, 1, sizeof size_of_image, fp);
+    fseek(fp, NEW_SECTION_RAW_OFF, SEEK_SET);
+    if (fwrite(section_data, 1, sizeof section_data, fp) !=
+        sizeof section_data) {
+        fclose(fp); puts("Failed while writing repeat-mode section."); return 1;
+    }
+
+    repeat_hook[0] = 0xe9;
+    rel = (int32_t)(REPEAT_CODE_VA - (UINT64_C(0x140004294) + 5));
+    memcpy(repeat_hook + 1, &rel, sizeof rel);
+    repeat_hook[5] = 0x90;
+    repeat_hook[6] = 0x90;
+    fseek(fp, REPEAT_HOOK_OFF, SEEK_SET);
+    if (fwrite(repeat_hook, 1, sizeof repeat_hook, fp) !=
+        sizeof repeat_hook) {
+        fclose(fp); puts("Failed while installing repeat-mode hook."); return 1;
+    }
+    bedrock_hook[0] = 0xe9;
+    rel = (int32_t)((REPEAT_CODE_VA + repeat_code.bedrock_entry) -
+                    (UINT64_C(0x14004cf2c) + 5));
+    memcpy(bedrock_hook + 1, &rel, sizeof rel);
+    memset(bedrock_hook + 5, 0x90, 5);
+    fseek(fp, BEDROCK_HOOK_OFF, SEEK_SET);
+    if (fwrite(bedrock_hook, 1, sizeof bedrock_hook, fp) !=
+        sizeof bedrock_hook) {
+        fclose(fp); puts("Failed while installing bedrock hook."); return 1;
+    }
+    bedrock_level_hook[0] = 0xe9;
+    rel = (int32_t)((REPEAT_CODE_VA + repeat_code.bedrock_level_entry) -
+                    (UINT64_C(0x1400aa82a) + 5));
+    memcpy(bedrock_level_hook + 1, &rel, sizeof rel);
+    memset(bedrock_level_hook + 5, 0x90, 4);
+    fseek(fp, BEDROCK_LEVEL_HOOK_OFF, SEEK_SET);
+    if (fwrite(bedrock_level_hook, 1, sizeof bedrock_level_hook, fp) !=
+        sizeof bedrock_level_hook) {
+        fclose(fp); puts("Failed while installing bedrock-level hook."); return 1;
+    }
+    tower_hook[0] = 0xe9;
+    rel = (int32_t)((REPEAT_CODE_VA + repeat_code.tower_entry) -
+                    (UINT64_C(0x1400aaa0f) + 5));
+    memcpy(tower_hook + 1, &rel, sizeof rel);
+    tower_hook[5] = 0x90;
+    fseek(fp, TOWER_HOOK_OFF, SEEK_SET);
+    if (fwrite(tower_hook, 1, sizeof tower_hook, fp) != sizeof tower_hook) {
+        fclose(fp); puts("Failed while installing fast tower hook."); return 1;
+    }
+    replace_hook[0] = 0xe9;
+    rel = (int32_t)((REPEAT_CODE_VA + repeat_code.replace_entry) -
+                    (UINT64_C(0x1400ab9de) + 5));
+    memcpy(replace_hook + 1, &rel, sizeof rel);
+    replace_hook[5] = 0x90;
+    fseek(fp, REPLACE_HOOK_OFF, SEEK_SET);
+    if (fwrite(replace_hook, 1, sizeof replace_hook, fp) !=
+        sizeof replace_hook) {
+        fclose(fp); puts("Failed while installing replace-mode hook."); return 1;
+    }
+    replace_occupied_hook[0] = 0xe9;
+    rel = (int32_t)((REPEAT_CODE_VA + repeat_code.replace_occupied_entry) -
+                    (UINT64_C(0x1400abd05) + 5));
+    memcpy(replace_occupied_hook + 1, &rel, sizeof rel);
+    memset(replace_occupied_hook + 5, 0x90, 5);
+    fseek(fp, REPLACE_OCCUPIED_HOOK_OFF, SEEK_SET);
+    if (fwrite(replace_occupied_hook, 1, sizeof replace_occupied_hook, fp) !=
+        sizeof replace_occupied_hook) {
+        fclose(fp); puts("Failed while installing occupied-cell replace hook.");
+        return 1;
+    }
+    autofill_build_hook[0] = 0xe9;
+    rel = (int32_t)((REPEAT_CODE_VA + repeat_code.autofill_entry) -
+                    (UINT64_C(0x1400ac316) + 5));
+    memcpy(autofill_build_hook + 1, &rel, sizeof rel);
+    fseek(fp, AUTOFILL_BUILD_HOOK_OFF, SEEK_SET);
+    if (fwrite(autofill_build_hook, 1, sizeof autofill_build_hook, fp) !=
+        sizeof autofill_build_hook) {
+        fclose(fp); puts("Failed while installing auto-fill build hook.");
+        return 1;
+    }
+    reach_hook[0] = 0xe9;
+    rel = (int32_t)((REPEAT_CODE_VA + repeat_code.reach_entry) -
+                    (UINT64_C(0x14011c8b6) + 5));
+    memcpy(reach_hook + 1, &rel, sizeof rel);
+    memset(reach_hook + 5, 0x90, 4);
+    fseek(fp, REACH_HOOK_OFF, SEEK_SET);
+    if (fwrite(reach_hook, 1, sizeof reach_hook, fp) != sizeof reach_hook) {
+        fclose(fp); puts("Failed while installing extended-reach hook.");
+        return 1;
+    }
+    noclip_hook[0] = 0xe9;
+    rel = (int32_t)((REPEAT_CODE_VA + repeat_code.noclip_entry) -
+                    (UINT64_C(0x1400ae710) + 5));
+    memcpy(noclip_hook + 1, &rel, sizeof rel);
+    noclip_hook[5] = 0x90;
+    fseek(fp, NOCLIP_HOOK_OFF, SEEK_SET);
+    if (fwrite(noclip_hook, 1, sizeof noclip_hook, fp) !=
+        sizeof noclip_hook) {
+        fclose(fp); puts("Failed while installing noclip hook."); return 1;
+    }
+    hud_hook[0] = 0xe9;
+    rel = (int32_t)(HUD_CODE_VA - (UINT64_C(0x14009a11d) + 5));
+    memcpy(hud_hook + 1, &rel, sizeof rel);
+    hud_hook[5] = 0x90;
+    hud_hook[6] = 0x90;
+    fseek(fp, HUD_HOOK_OFF, SEEK_SET);
+    if (fwrite(hud_hook, 1, sizeof hud_hook, fp) != sizeof hud_hook) {
+        fclose(fp); puts("Failed while installing HUD indicator hook."); return 1;
+    }
+    null_texture_hook[0] = 0xe9;
+    rel = (int32_t)((REPEAT_CODE_VA + repeat_code.null_texture_entry) -
+                    (UINT64_C(0x1400f6ed0) + 5));
+    memcpy(null_texture_hook + 1, &rel, sizeof rel);
+    memset(null_texture_hook + 5, 0x90, 3);
+    fseek(fp, NULL_TEXTURE_HOOK_OFF, SEEK_SET);
+    if (fwrite(null_texture_hook, 1, sizeof null_texture_hook, fp) !=
+        sizeof null_texture_hook) {
+        fclose(fp); puts("Failed while installing null-texture guard."); return 1;
+    }
+
+    /* Reduced horizontal acceleration and gentler vertical acceleration.
+       Walking constants are not changed. */
+    speed_words[0] = 0x40200000;
+    speed_words[1] = 0x40200000;
+    fseek(fp, FLY_XZ_SPEED_OFF, SEEK_SET);
+    if (fwrite(speed_words, 1, sizeof speed_words, fp) != sizeof speed_words) {
+        fclose(fp); puts("Failed while writing horizontal flight speed."); return 1;
+    }
+    /*
+     * Preserve the 2.5-unit acceleration above, but reduce in-flight damping
+     * from 0.995 to 0.9995. This raises terminal flight speed about tenfold
+     * without changing the acceleration applied by movement input.
+     */
+    fly_drag_word = 0x3f7fdf3b; /* 0.9995f */
+    fseek(fp, FLY_DRAG_OFF, SEEK_SET);
+    if (fwrite(&fly_drag_word, 1, sizeof fly_drag_word, fp) !=
+        sizeof fly_drag_word) {
+        fclose(fp); puts("Failed while raising the flight speed threshold.");
+        return 1;
+    }
+    speed_words[0] = 0x3e4ccccd; /* +0.20 per update */
+    speed_words[1] = 0xbe4ccccd; /* -0.20 per update */
+    fseek(fp, FLY_Y_SPEED_OFF, SEEK_SET);
+    if (fwrite(speed_words, 1, sizeof speed_words, fp) != sizeof speed_words) {
+        fclose(fp); puts("Failed while writing vertical flight speed."); return 1;
+    }
+    /*
+     * Turn Eden's fixed vertical assignment into accumulation. When the up
+     * key is not held, the existing zero becomes "add zero"; Ctrl contributes
+     * the negative acceleration. Route the no-Ctrl path through the common
+     * store so the accumulated result is retained.
+     */
+    vertical_add[2] = 0x58;      /* movss -> addss [player.y], xmm0 */
+    vertical_branch[1] = 0x08;   /* route through common store at 0x1400ad30e */
+    fseek(fp, VERTICAL_ADD_OFF, SEEK_SET);
+    if (fwrite(vertical_add, 1, sizeof vertical_add, fp) !=
+        sizeof vertical_add) {
+        fclose(fp); puts("Failed while enabling vertical acceleration.");
+        return 1;
+    }
+    fseek(fp, VERTICAL_STORE_BRANCH_OFF, SEEK_SET);
+    if (fwrite(vertical_branch, 1, sizeof vertical_branch, fp) !=
+        sizeof vertical_branch) {
+        fclose(fp); puts("Failed while routing vertical acceleration.");
+        return 1;
+    }
+    vertical_store[0] = 0xe9;
+    rel = (int32_t)((CAVE_VA + code.vertical_entry) -
+                    (UINT64_C(0x1400ad30e) + 5));
+    memcpy(vertical_store + 1, &rel, sizeof rel);
+    fseek(fp, VERTICAL_STORE_OFF, SEEK_SET);
+    if (fwrite(vertical_store, 1, sizeof vertical_store, fp) !=
+        sizeof vertical_store) {
+        fclose(fp); puts("Failed while adding vertical deceleration.");
+        return 1;
+    }
+    /*
+     * Experimental large-batch terrain streaming. The stock game recenters
+     * after more than 140 entries in its 28x28 terrain window are missing.
+     * Wait for roughly ten exposed rows (280 entries) so the unavoidable
+     * synchronous save/rebuild overhead occurs much less frequently.
+     */
+    if (streaming) {
+        stream_threshold[3] = 0x18; /* 0x118 = 280 */
+        stream_threshold[4] = 0x01;
+        fseek(fp, STREAM_THRESHOLD_OFF, SEEK_SET);
+        if (fwrite(stream_threshold, 1, sizeof stream_threshold, fp) !=
+            sizeof stream_threshold) {
+            fclose(fp); puts("Failed while enabling incremental streaming.");
+            return 1;
+        }
+        stream_emergency[3] = 0x2d; /* stock emergency limit: 301 */
+        stream_emergency[4] = 0x01;
+        fseek(fp, STREAM_EMERGENCY_OFF, SEEK_SET);
+        if (fwrite(stream_emergency, 1, sizeof stream_emergency, fp) !=
+            sizeof stream_emergency) {
+            fclose(fp); puts("Failed while raising streaming safety limit.");
+            return 1;
+        }
+    }
+    rel = (int32_t)(CAVE_VA - (UPDATE_VA + 5));
+    memcpy(hook + 1, &rel, sizeof rel);
+    fseek(fp, UPDATE_OFF, SEEK_SET);
+    if (fwrite(hook, 1, sizeof hook, fp) != sizeof hook || fclose(fp) != 0) {
+        puts("Failed while writing flight hook."); return 1;
+    }
+
+    printf("Created: %s\n", dst);
+    puts("Flight: V toggle, WASD move, Space up, Ctrl down.");
+    puts("Repeat P cycle: 5/sec, 10/sec, 20/sec, 50/sec, off.");
+    puts("Bedrock breaking: B toggle.");
+    puts("Noclip: N toggle.");
+    puts("Replace mode: O toggle (vibrant-pink HUD indicator).");
+    puts("Auto-fill: L starts/arms filled; K arms hollow after point A.");
+    puts("Area clear: J sets point A, then J arms point B.");
+    if (streaming)
+        puts("Experimental terrain streaming: large, less-frequent recenter batches.");
+    return 0;
+}
