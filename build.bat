@@ -31,6 +31,10 @@ ld -mi386pep --image-base 0x1446c4000 -e macro_input ^
   --defsym FREAD_IAT=0x1402e8000 ^
   --defsym FWRITE_IAT=0x1402e8020 ^
   --defsym FCLOSE_IAT=0x1402e7fb0 ^
+  --defsym GETMODULE_IAT=0x1402e7d58 ^
+  --defsym GETPROC_IAT=0x1402e7d70 ^
+  --defsym GETLAND=0x14004d9b0 ^
+  --defsym IGNORE_LIQUID_STATE=0x1446c37dc ^
   --defsym WORLD_REFPTR=0x1402a8970 ^
   --defsym BUILD_BLOCK=0x140050a00 ^
   --defsym DESTROY_BLOCK=0x14004ce90 ^

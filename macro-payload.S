@@ -8,6 +8,10 @@
 .extern FREAD_IAT
 .extern FWRITE_IAT
 .extern FCLOSE_IAT
+.extern GETMODULE_IAT
+.extern GETPROC_IAT
+.extern GETLAND
+.extern IGNORE_LIQUID_STATE
 .extern WORLD_REFPTR
 .extern BUILD_BLOCK
 .extern DESTROY_BLOCK
@@ -127,10 +131,13 @@ macro_digit:
     mov r10d, ecx
     cmp byte ptr [rip + MACRO_STATE], 3
     je macro_save
+    cmp byte ptr [rip + MACRO_STATE], 5
+    je macro_select_preset
     cmp byte ptr [rip + MACRO_STATE], 1
     jne macro_digit_done
     cmp dword ptr [rip + MACRO_COUNT], 0
     jne macro_digit_done
+macro_select_preset:
     lea rax, [rip + PRESET_COUNTS]
     mov eax, dword ptr [rax + r10*4]
     test eax, eax
@@ -407,6 +414,103 @@ mode_rb:      .asciz "rb"
 mode_wb:      .asciz "wb"
 macro_suffix: .asciz "\\Eden\\eden_macros.dat"
 
+/* Resolve GetKeyState once and return the Caps Lock toggle bit in AL. */
+.org 0x700, 0xcc
+macro_caps_on:
+    sub rsp, 0x28
+    mov rax, qword ptr [rip + META + 0xa0]
+    test rax, rax
+    jnz 1f
+    lea rcx, [rip + user32_name]
+    call qword ptr [rip + GETMODULE_IAT]
+    test rax, rax
+    jz 2f
+    mov rcx, rax
+    lea rdx, [rip + getkeystate_name]
+    call qword ptr [rip + GETPROC_IAT]
+    test rax, rax
+    jz 2f
+    mov qword ptr [rip + META + 0xa0], rax
+1:
+    mov ecx, 0x14                         /* VK_CAPITAL */
+    call rax
+    and eax, 1                           /* low bit is the toggle state */
+    add rsp, 0x28
+    ret
+2:
+    xor eax, eax
+    add rsp, 0x28
+    ret
+
+user32_name:      .asciz "user32.dll"
+getkeystate_name: .asciz "GetKeyState"
+
+/* Refill an Ignore-Liquid break when any of its six neighbors is water. */
+.org 0x800, 0xcc
+macro_refill_water:
+    cmp byte ptr [rip + IGNORE_LIQUID_STATE], 0
+    je macro_refill_done
+    sub rsp, 0x28
+    lea ecx, [rbx + 1]
+    mov edx, esi
+    mov r8d, edi
+    call GETLAND
+    cmp eax, 0x14
+    je macro_refill_build
+    lea ecx, [rbx - 1]
+    mov edx, esi
+    mov r8d, edi
+    call GETLAND
+    cmp eax, 0x14
+    je macro_refill_build
+    mov ecx, ebx
+    lea edx, [rsi + 1]
+    mov r8d, edi
+    call GETLAND
+    cmp eax, 0x14
+    je macro_refill_build
+    mov ecx, ebx
+    lea edx, [rsi - 1]
+    mov r8d, edi
+    call GETLAND
+    cmp eax, 0x14
+    je macro_refill_build
+    mov ecx, ebx
+    mov edx, esi
+    lea r8d, [rdi + 1]
+    call GETLAND
+    cmp eax, 0x14
+    je macro_refill_build
+    mov ecx, ebx
+    mov edx, esi
+    lea r8d, [rdi - 1]
+    call GETLAND
+    cmp eax, 0x14
+    jne macro_refill_return
+macro_refill_build:
+    mov rax, qword ptr [rip + WORLD_REFPTR]
+    mov rax, qword ptr [rax]
+    mov rax, qword ptr [rax + 0x20]
+    mov ecx, dword ptr [rax + 0x18]
+    mov dword ptr [rsp + 0x20], ecx
+    mov dword ptr [rax + 0x18], 0x14
+    mov rax, qword ptr [rip + WORLD_REFPTR]
+    mov rax, qword ptr [rax]
+    mov rcx, qword ptr [rax]
+    mov edx, ebx
+    mov r8d, esi
+    mov r9d, edi
+    call BUILD_BLOCK
+    mov rax, qword ptr [rip + WORLD_REFPTR]
+    mov rax, qword ptr [rax]
+    mov rax, qword ptr [rax + 0x20]
+    mov ecx, dword ptr [rsp + 0x20]
+    mov dword ptr [rax + 0x18], ecx
+macro_refill_return:
+    add rsp, 0x28
+macro_refill_done:
+    ret
+
 .org 0x1000, 0xcc
 .global macro_build
 macro_build:
@@ -487,7 +591,14 @@ macro_play_done:
     mov dword ptr [rbp + 0x1c], eax
     mov al, byte ptr [rsp + 0x2c]
     mov byte ptr [rbp + 0x9ec], al
+    call macro_caps_on
+    test al, al
+    jz 1f
+    mov byte ptr [rip + MACRO_STATE], 5
+    jmp 2f
+1:
     mov byte ptr [rip + MACRO_STATE], 0
+2:
     add rsp, 0x30
     pop r15
     pop r14
@@ -502,6 +613,7 @@ macro_play_done:
 .global macro_destroy
 macro_destroy:
     call DESTROY_BLOCK
+    call macro_refill_water
     mov eax, 1
     call macro_record
     jmp DESTROY_RETURN

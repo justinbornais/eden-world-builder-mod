@@ -40,6 +40,7 @@ enum {
     REPLACE_HOOK_OFF = 0xaadde,
     REPLACE_OCCUPIED_HOOK_OFF = 0xab105,
     AUTOFILL_BUILD_HOOK_OFF = 0xab716,
+    IGNORE_LIQUID_HOOK_OFF = 0x11bd4e,
     MACRO_DESTROY_HOOK_OFF = 0xab1e3,
     MACRO_PAINT_HOOK_OFF = 0xab380,
     REACH_HOOK_OFF = 0x11bcb6,
@@ -79,6 +80,7 @@ static const uint64_t CLEAR_STATE_VA   =UINT64_C(0x1446c37c0);
 static const uint64_t CLEAR_X_VA       =UINT64_C(0x1446c37c4);
 static const uint64_t CLEAR_Y_VA       =UINT64_C(0x1446c37c8);
 static const uint64_t CLEAR_Z_VA       =UINT64_C(0x1446c37cc);
+static const uint64_t IGNORE_LIQUID_STATE_VA=UINT64_C(0x1446c37dc);
 static const uint64_t LMB_PREV        = UINT64_C(0x1403128ec);
 static const uint64_t PLAYER_PREV_RT  = UINT64_C(0x1408f1dd0);
 static const uint64_t GETTICK_IAT     = UINT64_C(0x1402e7db0);
@@ -94,6 +96,7 @@ typedef struct {
     size_t replace_occupied_entry;
     size_t autofill_entry;
     size_t reach_entry;
+    size_t ignore_liquid_entry;
     size_t noclip_entry;
     size_t null_texture_entry;
 } Code;
@@ -326,6 +329,15 @@ static int build_repeat_payload(Code *c) {
     byte(c, 0x80); byte(c, 0x35);
     next = REPEAT_CODE_VA + c->n + 5;
     dword(c, (int32_t)(REPLACE_STATE_VA - next)); byte(c, 1);
+
+    /* I makes the targeting ray continue through water and lava. */
+    byte(c, 0xb9); dword(c, 0x49);                 /* mov ecx, VK_I */
+    byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
+    byte(c, 0xa8); byte(c, 1);
+    byte(c, 0x74); byte(c, 7);
+    byte(c, 0x80); byte(c, 0x35);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(IGNORE_LIQUID_STATE_VA - next)); byte(c, 1);
 
     /* L starts point A, or arms a filled point B after A was recorded. */
     {
@@ -570,20 +582,40 @@ static int build_repeat_payload(Code *c) {
      */
     if (c->n < 0x200) c->n = 0x200;
     c->replace_occupied_entry = c->n;
-    byte(c, 0x80); byte(c, 0x3d);
-    next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(REPLACE_STATE_VA - next)); byte(c, 0);
-    byte(c, 0x75); byte(c, 15);                   /* O on -> native build path */
-    byte(c, 0xf6); byte(c, 0x04); byte(c, 0x8a); byte(c, 0x40); /* original test */
-    byte(c, 0x0f); byte(c, 0x84);
-    dword(c, (int32_t)(UINT64_C(0x1400ac34a) -
-                       (REPEAT_CODE_VA + c->n + 4)));
-    byte(c, 0xe9);
-    dword(c, (int32_t)(UINT64_C(0x1400abd0f) -
-                       (REPEAT_CODE_VA + c->n + 4)));
-    byte(c, 0xe9);
-    dword(c, (int32_t)(UINT64_C(0x1400abcaa) -
-                       (REPEAT_CODE_VA + c->n + 4)));
+    {
+        size_t replace_native, liquid_original, water_native, lava_native;
+        size_t native_path, original_path;
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(REPLACE_STATE_VA - next)); byte(c, 0);
+        byte(c, 0x0f); byte(c, 0x85); replace_native = c->n; dword(c, 0);
+        byte(c, 0x80); byte(c, 0x3d);
+        next = REPEAT_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(IGNORE_LIQUID_STATE_VA - next)); byte(c, 0);
+        byte(c, 0x0f); byte(c, 0x84); liquid_original = c->n; dword(c, 0);
+        byte(c, 0x83); byte(c, 0xf8); byte(c, 0x14);
+        byte(c, 0x0f); byte(c, 0x84); water_native = c->n; dword(c, 0);
+        byte(c, 0x83); byte(c, 0xf8); byte(c, 0x17);
+        byte(c, 0x0f); byte(c, 0x84); lava_native = c->n; dword(c, 0);
+
+        original_path = c->n;
+        byte(c, 0xf6); byte(c, 0x04); byte(c, 0x8a); byte(c, 0x40);
+        byte(c, 0x0f); byte(c, 0x84);
+        dword(c, (int32_t)(UINT64_C(0x1400ac34a) -
+                           (REPEAT_CODE_VA + c->n + 4)));
+        byte(c, 0xe9);
+        dword(c, (int32_t)(UINT64_C(0x1400abd0f) -
+                           (REPEAT_CODE_VA + c->n + 4)));
+
+        native_path = c->n;
+        byte(c, 0xe9);
+        dword(c, (int32_t)(UINT64_C(0x1400abcaa) -
+                           (REPEAT_CODE_VA + c->n + 4)));
+        local32(c, replace_native, native_path);
+        local32(c, water_native, native_path);
+        local32(c, lava_native, native_path);
+        local32(c, liquid_original, original_path);
+    }
 
     /*
      * findWorldCoords samples the targeting ray every 0.125 block. The stock
@@ -613,6 +645,29 @@ static int build_repeat_payload(Code *c) {
     byte(c, 0x58);                                  /* pop rax */
     byte(c, 0xe9);
     dword(c, (int32_t)(UINT64_C(0x14011c8bf) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+
+    /* Skip water (0x14) and lava (0x17) while Ignore Liquid is enabled. */
+    c->ignore_liquid_entry = c->n;
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(IGNORE_LIQUID_STATE_VA - next)); byte(c, 0);
+    byte(c, 0x74); byte(c, 20);                    /* disabled -> stock test */
+    byte(c, 0x41); byte(c, 0x83); byte(c, 0xfd); byte(c, 0x14);
+    byte(c, 0x0f); byte(c, 0x84);                  /* water -> next sample */
+    dword(c, (int32_t)(UINT64_C(0x14011c8b4) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+    byte(c, 0x41); byte(c, 0x83); byte(c, 0xfd); byte(c, 0x17);
+    byte(c, 0x0f); byte(c, 0x84);                  /* lava -> next sample */
+    dword(c, (int32_t)(UINT64_C(0x14011c8b4) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+    byte(c, 0x41); byte(c, 0x8d); byte(c, 0x45); byte(c, 0xff);
+    byte(c, 0x83); byte(c, 0xf8); byte(c, 0xfd);
+    byte(c, 0x0f); byte(c, 0x87);
+    dword(c, (int32_t)(UINT64_C(0x14011c8b4) -
+                       (REPEAT_CODE_VA + c->n + 4)));
+    byte(c, 0xe9);
+    dword(c, (int32_t)(UINT64_C(0x14011c95b) -
                        (REPEAT_CODE_VA + c->n + 4)));
 
     /*
@@ -1004,7 +1059,7 @@ static void hud_finish_skip(Code *c, size_t displacement) {
 
 static int build_hud_payload(Code *c) {
     size_t skip_hud, skip_f, skip_n, skip_p, skip_o, skip_fill, skip_clear;
-    size_t skip_macro;
+    size_t skip_macro, skip_liquid;
     size_t state2_jump, state3_jump, state4_jump;
     size_t color_done1, color_done2, color_done3;
     size_t original_epilogue;
@@ -1166,6 +1221,11 @@ static int build_hud_payload(Code *c) {
     hud_rect(c, 142, 4, 160, 22);
     hud_finish_skip(c, skip_macro);
 
+    skip_liquid = hud_skip_if_zero(c, IGNORE_LIQUID_STATE_VA);
+    hud_color(c, 0.00f, 0.90f, 0.95f);            /* bright aqua */
+    hud_rect(c, 165, 4, 183, 22);
+    hud_finish_skip(c, skip_liquid);
+
     hud_gl_cap(c, 0x8076, UINT64_C(0x1400127b0)); /* restore color array */
     hud_gl_cap(c, 0x0de1, UINT64_C(0x1400126f0)); /* restore texturing */
     hud_gl_cap(c, 0x0b44, UINT64_C(0x1400126f0)); /* restore face culling */
@@ -1234,6 +1294,8 @@ int main(int argc, char **argv) {
         {0xe8,0xeb,0x55,0xfa,0xff};
     static const unsigned char expected_reach_hook[] =
         {0x83,0xfe,0x78,0x0f,0x84,0x86,0x02,0x00,0x00};
+    static const unsigned char expected_ignore_liquid_hook[] =
+        {0x41,0x8d,0x45,0xff,0x83,0xf8,0xfd,0x0f,0x87,0x59,0xff,0xff,0xff};
     static const unsigned char expected_noclip_hook[] =
         {0x41,0x57,0x41,0x56,0x41,0x55};
     static const unsigned char expected_hud_hook[] =
@@ -1247,6 +1309,7 @@ int main(int argc, char **argv) {
     unsigned char macro_blob[0x2000];
     unsigned char bedrock_hook[10], bedrock_level_hook[9], tower_hook[6];
     unsigned char replace_hook[6], replace_occupied_hook[10], reach_hook[9];
+    unsigned char ignore_liquid_hook[13];
     unsigned char autofill_build_hook[5];
     unsigned char macro_destroy_hook[5], macro_paint_hook[5];
     unsigned char noclip_hook[6];
@@ -1327,6 +1390,8 @@ int main(int argc, char **argv) {
     fread(macro_paint_hook, 1, sizeof macro_paint_hook, fp);
     fseek(fp, REACH_HOOK_OFF, SEEK_SET);
     fread(reach_hook, 1, sizeof reach_hook, fp);
+    fseek(fp, IGNORE_LIQUID_HOOK_OFF, SEEK_SET);
+    fread(ignore_liquid_hook, 1, sizeof ignore_liquid_hook, fp);
     fseek(fp, NOCLIP_HOOK_OFF, SEEK_SET);
     fread(noclip_hook, 1, sizeof noclip_hook, fp);
     fseek(fp, HUD_HOOK_OFF, SEEK_SET);
@@ -1384,6 +1449,8 @@ int main(int argc, char **argv) {
                sizeof expected_macro_paint_hook) != 0 ||
         memcmp(reach_hook, expected_reach_hook,
                sizeof expected_reach_hook) != 0 ||
+        memcmp(ignore_liquid_hook, expected_ignore_liquid_hook,
+               sizeof expected_ignore_liquid_hook) != 0 ||
         memcmp(noclip_hook, expected_noclip_hook,
                sizeof expected_noclip_hook) != 0 ||
         memcmp(hud_hook, expected_hud_hook,
@@ -1465,6 +1532,7 @@ int main(int argc, char **argv) {
     memset(section_data + 0x7c4, 0, 12);     /* clear point A coordinates */
     put32(section_data + 0x7d4, 0x3f4ccccd); /* horizontal coast: 0.8 */
     put32(section_data + 0x7d8, 0x3f7851ec); /* vertical coast: 0.97 */
+    section_data[0x7dc] = 0;                /* ignore liquid defaults off */
     section_count = 9;
     size_of_image = 0x46c7000;
     fseek(fp, NEW_SECTION_HEADER_OFF, SEEK_SET);
@@ -1578,6 +1646,17 @@ int main(int argc, char **argv) {
     fseek(fp, REACH_HOOK_OFF, SEEK_SET);
     if (fwrite(reach_hook, 1, sizeof reach_hook, fp) != sizeof reach_hook) {
         fclose(fp); puts("Failed while installing extended-reach hook.");
+        return 1;
+    }
+    ignore_liquid_hook[0] = 0xe9;
+    rel = (int32_t)((REPEAT_CODE_VA + repeat_code.ignore_liquid_entry) -
+                    (UINT64_C(0x14011c94e) + 5));
+    memcpy(ignore_liquid_hook + 1, &rel, sizeof rel);
+    memset(ignore_liquid_hook + 5, 0x90, 8);
+    fseek(fp, IGNORE_LIQUID_HOOK_OFF, SEEK_SET);
+    if (fwrite(ignore_liquid_hook, 1, sizeof ignore_liquid_hook, fp) !=
+        sizeof ignore_liquid_hook) {
+        fclose(fp); puts("Failed while installing ignore-liquid hook.");
         return 1;
     }
     noclip_hook[0] = 0xe9;
@@ -1698,6 +1777,7 @@ int main(int argc, char **argv) {
     puts("Bedrock breaking: B toggle.");
     puts("Noclip: N toggle.");
     puts("Replace mode: O toggle (vibrant-pink HUD indicator).");
+    puts("Ignore Liquid: I toggle (target through water and lava).");
     puts("Auto-fill: L starts/arms filled; K arms hollow after point A.");
     puts("Area clear: J sets point A, then J arms point B.");
     puts("Macros: M records/stops; 1-0 saves or selects a session preset.");
