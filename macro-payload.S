@@ -27,12 +27,21 @@
 .global macro_input
 macro_input:
     sub rsp, 0x28
+    /* Escape cancels every macro mode except an active recording with edits. */
+    mov ecx, 0x1b
+    call qword ptr [rip + GETKEY_IAT]
+    test ax, ax
+    jz 1f
+    cmp byte ptr [rip + MACRO_STATE], 2
+    je 1f
+    mov byte ptr [rip + MACRO_STATE], 0
+1:
     mov ecx, 0x4d
     call qword ptr [rip + GETKEY_IAT]
     test al, 1
-    jz 1f
+    jz 2f
     call macro_toggle
-1:
+2:
     mov ecx, 0x31
     xor edx, edx
     call poll_digit

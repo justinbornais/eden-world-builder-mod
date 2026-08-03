@@ -15,6 +15,7 @@ The included `eden-mod.exe` is a precompiled copy of the patcher for users witho
 - `P`: Cycle repeated placement/breaking through 5, 10, 20, and 50 per second, then off. This saves having to repeatedly click to place or destroy a block. Works for colors too.
 - `M`: Start recording a session-only macro; press `M` again (or reach 32,768 edits), then press `1`-`0` to save it in that preset.
 - To replay a saved macro, press `M`, press its preset digit before making an edit, then place the anchor block; placements, breaks, block types, and colors replay relative to it.
+- `Esc` cancels macro mode before its first recorded edit, while waiting to save, or after selecting a replay preset; it does not interrupt a recording that already contains edits.
 - The 20/s repeat mode extends placement and breaking reach from the stock 15 blocks to 20 blocks; 50/s extends it to 50 blocks. Lower repeat modes retain stock reach.
 - HUD squares show active modes, including a flashing dark-red macro-recording indicator and a solid green ready-to-save/replay indicator.
 - Auto-fill replaces occupied cells and rejects operations larger than 1,048,576 candidate cells.
