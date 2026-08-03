@@ -34,3 +34,5 @@ With the MSYS2 MinGW64 tools (`as`, `ld`, `objcopy`, and `gcc`) on `PATH`, run:
 ```
 
 This reads `Eden - World Builder.exe`, creates `Eden - Modded.exe`, and removes intermediate files; optional input and output paths can be supplied as the first and second arguments.
+
+The generated `eden-mod.exe` embeds its macro payload and is standalone; release users do not need `macro-payload.S` or any other build artifact.

@@ -19,10 +19,10 @@ if not exist "%EDEN_SOURCE%" (
     exit /b 1
 )
 
-echo [1/5] Assembling macro payload...
+echo [1/6] Assembling macro payload...
 as -o macro-payload.o macro-payload.S || goto :failed
 
-echo [2/5] Linking macro payload...
+echo [2/6] Linking macro payload...
 ld -mi386pep --image-base 0x1446c4000 -e macro_input ^
   --defsym GETKEY_IAT=0x1402e7bb8 ^
   --defsym CALLOC_IAT=0x1402e82d0 ^
@@ -35,13 +35,16 @@ ld -mi386pep --image-base 0x1446c4000 -e macro_input ^
   --defsym META=0x1446c4f00 ^
   -o macro-payload.exe macro-payload.o || goto :failed
 
-echo [3/5] Extracting payload bytes...
+echo [3/6] Extracting payload bytes...
 objcopy -O binary -j .text macro-payload.exe macro-payload.bin || goto :failed
 
-echo [4/5] Compiling patcher...
-gcc -O2 -Wall -Wextra -o eden-mod.exe eden-mod.c || goto :failed
+echo [4/6] Embedding payload in the standalone patcher...
+objcopy -I binary -O pe-x86-64 -B i386:x86-64 macro-payload.bin macro-blob.o || goto :failed
 
-echo [5/5] Building "%EDEN_OUTPUT%"...
+echo [5/6] Compiling patcher...
+gcc -O2 -Wall -Wextra -o eden-mod.exe eden-mod.c macro-blob.o || goto :failed
+
+echo [6/6] Building "%EDEN_OUTPUT%"...
 eden-mod.exe "%EDEN_SOURCE%" "%EDEN_OUTPUT%" || goto :failed
 
 call :cleanup
@@ -55,5 +58,5 @@ call :cleanup
 exit /b %BUILD_ERROR%
 
 :cleanup
-del /q macro-payload.o macro-payload.exe macro-payload.bin eden-mod.exe 2>nul
+del /q macro-payload.o macro-payload.exe macro-payload.bin macro-blob.o 2>nul
 exit /b 0
