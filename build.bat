@@ -42,6 +42,7 @@ ld -mi386pep --image-base 0x1446c4000 -e macro_input ^
   --defsym DESTROY_RETURN=0x1400abde8 ^
   --defsym PAINT_RETURN=0x1400abf85 ^
   --defsym META=0x1446c4f00 ^
+  --defsym CONFIG_CAPS_ENABLED=0x1446cc004 ^
   -o macro-payload.exe macro-payload.o || goto :failed
 
 echo [3/9] Extracting macro payload bytes...
@@ -69,15 +70,31 @@ ld -mi386pep --image-base 0x1446c6000 -e mod_hud ^
   --defsym CLEAR_STATE=0x1446c37c0 ^
   --defsym MACRO_STATE=0x1446c4f08 ^
   --defsym IGNORE_LIQUID_STATE=0x1446c37dc ^
+  --defsym CONFIG_STATUS=0x1446cc000 ^
+  --defsym PANEL_ENABLED=0x1446cc003 ^
+  --defsym AUTOPLACE_VALUES=0x1446cc010 ^
+  --defsym RANGE_VALUES=0x1446cc030 ^
   -o hud-payload.exe hud-payload.o || goto :failed
 objcopy -O binary -j .text hud-payload.exe hud-payload.bin || goto :failed
+
+echo [5/9] Building runtime configuration payload...
+as -o config-payload.o config-payload.S || goto :failed
+ld -mi386pep --image-base 0x1446ca000 -e config_init ^
+  --defsym GETMODULEFILENAME_IAT=0x1402e7d50 ^
+  --defsym FOPEN_IAT=0x1402e7fe0 ^
+  --defsym FGETS_IAT=0x1402e7fd8 ^
+  --defsym FCLOSE_IAT=0x1402e7fb0 ^
+  --defsym STRTOL_IAT=0x1402e8250 ^
+  -o config-payload.exe config-payload.o || goto :failed
+objcopy -O binary -j .text config-payload.exe config-payload.bin || goto :failed
 
 echo [5/9] Embedding payloads in the standalone patcher...
 objcopy -I binary -O pe-x86-64 -B i386:x86-64 macro-payload.bin macro-blob.o || goto :failed
 objcopy -I binary -O pe-x86-64 -B i386:x86-64 hud-payload.bin hud-blob.o || goto :failed
+objcopy -I binary -O pe-x86-64 -B i386:x86-64 config-payload.bin config-blob.o || goto :failed
 
 echo [6/9] Compiling patcher...
-gcc -O2 -Wall -Wextra -o eden-mod.exe eden-mod.c macro-blob.o hud-blob.o || goto :failed
+gcc -O2 -Wall -Wextra -o eden-mod.exe eden-mod.c macro-blob.o hud-blob.o config-blob.o || goto :failed
 
 echo [7/9] Building "%EDEN_OUTPUT%"...
 eden-mod.exe "%EDEN_SOURCE%" "%EDEN_OUTPUT%" || goto :failed
@@ -100,4 +117,5 @@ exit /b %BUILD_ERROR%
 :cleanup
 del /q macro-payload.o macro-payload.exe macro-payload.bin macro-blob.o 2>nul
 del /q hud-payload.o hud-payload.exe hud-payload.bin hud-blob.o 2>nul
+del /q config-payload.o config-payload.exe config-payload.bin config-blob.o 2>nul
 exit /b 0

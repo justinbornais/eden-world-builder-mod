@@ -11,7 +11,7 @@ A binary patcher for the 64-bit v1.5.0 release of Eden World Builder. The includ
 | `O` | Toggle replace mode, which places into the targeted block. |
 | `I` | Toggle targeting through water and lava; underwater breaks refill from adjacent water. |
 | `P` | Cycle repeat speed: 5/s, 10/s, 20/s, 50/s, maximum, then off. |
-| `R` | Cycle reach: 20 blocks, 50 blocks, maximum practical range, then stock. |
+| `R` | Cycle reach: 20 blocks, 50 blocks, 100 blocks, maximum practical range, then stock. |
 | `L` | Select two points and build a filled line, rectangle, or rectangular prism. |
 | `K` | After selecting auto-fill point A, build a hollow shape at point B. |
 | `J` | Select two points and clear the enclosed area. |
@@ -23,6 +23,12 @@ A binary patcher for the 64-bit v1.5.0 release of Eden World Builder. The includ
 - With Caps Lock enabled, a selected macro remains armed for repeated placement and number keys switch presets directly.
 - Flight keeps the original acceleration rate but has a substantially higher maximum speed.
 - A persistent text panel reports every mode and its current state.
+
+## Configuration
+
+Keep `mod-config.yaml` beside `Eden - Modded.exe` at runtime; settings are optional and use safe defaults when omitted.
+
+The YAML file supports up to eight ordered `autoplace_presets` and `range_presets`, plus `status_panel` and `caps_lock_macro_repeat`; use `max` for every-update placement and `unlimited` for Eden's practical reach limit.
 
 ## Build
 

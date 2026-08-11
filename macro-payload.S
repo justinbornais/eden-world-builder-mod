@@ -19,6 +19,7 @@
 .extern DESTROY_RETURN
 .extern PAINT_RETURN
 .extern META
+.extern CONFIG_CAPS_ENABLED
 .set MACRO_PTR,     META+0x00
 .set MACRO_STATE,   META+0x08
 .set MACRO_COUNT,   META+0x0c
@@ -591,6 +592,8 @@ macro_play_done:
     mov dword ptr [rbp + 0x1c], eax
     mov al, byte ptr [rsp + 0x2c]
     mov byte ptr [rbp + 0x9ec], al
+    cmp byte ptr [rip + CONFIG_CAPS_ENABLED], 0
+    je 1f
     call macro_caps_on
     test al, al
     jz 1f

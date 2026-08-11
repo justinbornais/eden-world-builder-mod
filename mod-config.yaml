@@ -1,0 +1,14 @@
+# Eden World Builder Mod runtime configuration.
+# This file must remain beside Eden - Modded.exe.
+
+# Rates are placements/breaks per second; `max` means every game update.
+# Up to eight presets are supported, in the order shown here.
+autoplace_presets: [5, 10, 20, 50, max]
+
+# Ranges are blocks; `unlimited` uses Eden's practical ray-march limit.
+# Values above 448 are ignored for safety.
+range_presets: [20, 50, 100, unlimited]
+
+# Additional safe interface and macro preferences.
+status_panel: true
+caps_lock_macro_repeat: true

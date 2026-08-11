@@ -8,6 +8,8 @@ extern const unsigned char _binary_macro_payload_bin_start[];
 extern const unsigned char _binary_macro_payload_bin_end[];
 extern const unsigned char _binary_hud_payload_bin_start[];
 extern const unsigned char _binary_hud_payload_bin_end[];
+extern const unsigned char _binary_config_payload_bin_start[];
+extern const unsigned char _binary_config_payload_bin_end[];
 
 /*
  * Mod patch for Eden - World Builder PC v1.5.0 (64-bit).
@@ -84,6 +86,11 @@ static const uint64_t RANGE_STATE_VA = UINT64_C(0x1446c37dd);
 static const uint64_t LMB_PREV        = UINT64_C(0x1403128ec);
 static const uint64_t PLAYER_PREV_RT  = UINT64_C(0x1408f1dd0);
 static const uint64_t GETTICK_IAT     = UINT64_C(0x1402e7db0);
+static const uint64_t CONFIG_INIT_VA  = UINT64_C(0x1446cb000);
+static const uint64_t AUTOPLACE_COUNT_VA=UINT64_C(0x1446cc001);
+static const uint64_t RANGE_COUNT_VA  = UINT64_C(0x1446cc002);
+static const uint64_t AUTOPLACE_VALUES_VA=UINT64_C(0x1446cc010);
+static const uint64_t RANGE_VALUES_VA = UINT64_C(0x1446cc030);
 
 typedef struct {
     unsigned char b[2048];
@@ -259,6 +266,7 @@ static int build_repeat_payload(Code *c) {
     };
     static const unsigned char original_load_op[] = {0x0f,0xb6,0x05};
     size_t skip_all, skip_clear, throttle_skip, restore_at;
+    size_t p_cycle_done, r_cycle_done;
     size_t clear_first_dispatch, clear_begin_dispatch;
     uint64_t next;
 
@@ -284,37 +292,44 @@ static int build_repeat_payload(Code *c) {
     dword(c, (int32_t)(UINT64_C(0x1403128b0) - next)); byte(c, 1);
     byte(c, 0x0f); byte(c, 0x85);                 /* jne restore (rel32) */
     skip_all = c->n; dword(c, 0);
+    /* Load the required adjacent YAML configuration once per process. */
+    byte(c, 0xe8);
+    dword(c, (int32_t)(CONFIG_INIT_VA - (REPEAT_CODE_VA + c->n + 4)));
     /* Macro input is isolated in the second half of the injected section. */
     byte(c, 0xe8);
     dword(c, (int32_t)(MACRO_CODE_VA - (REPEAT_CODE_VA + c->n + 4)));
     byte(c, 0xb9); dword(c, 0x50);                 /* mov ecx, VK_P */
     byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
     byte(c, 0xa8); byte(c, 1);                    /* new press? */
-    byte(c, 0x74); byte(c, 0x16);                 /* skip state cycle */
+    byte(c, 0x74); p_cycle_done = c->n; byte(c, 0); /* skip state cycle */
     byte(c, 0xfe); byte(c, 0x05);                 /* inc repeat state */
     repeat_rip32(c, REPEAT_STATE_VA);
-    byte(c, 0x80); byte(c, 0x3d);                 /* reached state 6? */
-    next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 6);
-    byte(c, 0x72); byte(c, 7);                    /* states 1-5: keep */
+    byte(c, 0x0f); byte(c, 0xb6); byte(c, 0x05);  /* eax = preset count */
+    repeat_rip32(c, AUTOPLACE_COUNT_VA);
+    byte(c, 0x38); byte(c, 0x05);                 /* state <= count? */
+    repeat_rip32(c, REPEAT_STATE_VA);
+    byte(c, 0x76); byte(c, 7);
     byte(c, 0xc6); byte(c, 0x05);                 /* state 6 -> off */
     next = REPEAT_CODE_VA + c->n + 5;
     dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 0);
+    c->b[p_cycle_done] = (unsigned char)(c->n - p_cycle_done - 1);
 
     /* R independently cycles reach: 20, 50, practical maximum, stock. */
     byte(c, 0xb9); dword(c, 0x52);                 /* mov ecx, VK_R */
     byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
     byte(c, 0xa8); byte(c, 1);
-    byte(c, 0x74); byte(c, 0x16);
+    byte(c, 0x74); r_cycle_done = c->n; byte(c, 0);
     byte(c, 0xfe); byte(c, 0x05);
     repeat_rip32(c, RANGE_STATE_VA);
-    byte(c, 0x80); byte(c, 0x3d);
-    next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(RANGE_STATE_VA - next)); byte(c, 4);
-    byte(c, 0x72); byte(c, 7);
+    byte(c, 0x0f); byte(c, 0xb6); byte(c, 0x05);
+    repeat_rip32(c, RANGE_COUNT_VA);
+    byte(c, 0x38); byte(c, 0x05);
+    repeat_rip32(c, RANGE_STATE_VA);
+    byte(c, 0x76); byte(c, 7);
     byte(c, 0xc6); byte(c, 0x05);
     next = REPEAT_CODE_VA + c->n + 5;
     dword(c, (int32_t)(RANGE_STATE_VA - next)); byte(c, 0);
+    c->b[r_cycle_done] = (unsigned char)(c->n - r_cycle_done - 1);
 
     /* N independently toggles collision-free player movement. */
     byte(c, 0xb9); dword(c, 0x4e);                 /* mov ecx, VK_N */
@@ -453,31 +468,22 @@ static int build_repeat_payload(Code *c) {
      * unsigned wraparound is intentional here: subtraction remains correct.
      */
     byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETTICK_IAT);
-    byte(c, 0x41); byte(c, 0x89); byte(c, 0xc0); /* mov r8d, eax */
-    byte(c, 0x2b); byte(c, 0x05);                 /* sub eax, last_tick */
+    byte(c, 0x41); byte(c, 0x89); byte(c, 0xc0); /* r8d = current tick */
+    byte(c, 0x41); byte(c, 0x89); byte(c, 0xc1); /* r9d = current tick */
+    byte(c, 0x44); byte(c, 0x2b); byte(c, 0x0d); /* r9d -= last tick */
     repeat_rip32(c, REPEAT_TICK_VA);
-    byte(c, 0xb9); dword(c, 200);                 /* state 1: 5/sec */
-    byte(c, 0xba); dword(c, 100);                 /* state 2: 10/sec */
-    byte(c, 0x80); byte(c, 0x3d);
-    next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 2);
-    byte(c, 0x0f); byte(c, 0x44); byte(c, 0xca); /* cmove ecx, edx */
-    byte(c, 0xba); dword(c, 50);                  /* state 3: 20/sec */
-    byte(c, 0x80); byte(c, 0x3d);
-    next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 3);
-    byte(c, 0x0f); byte(c, 0x44); byte(c, 0xca);
-    byte(c, 0xba); dword(c, 20);                  /* state 4: 50/sec */
-    byte(c, 0x80); byte(c, 0x3d);
-    next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 4);
-    byte(c, 0x0f); byte(c, 0x44); byte(c, 0xca);
-    byte(c, 0x31); byte(c, 0xd2);                 /* state 5: every update */
-    byte(c, 0x80); byte(c, 0x3d);
-    next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 5);
-    byte(c, 0x0f); byte(c, 0x44); byte(c, 0xca);
-    byte(c, 0x39); byte(c, 0xc8);                 /* cmp eax, ecx */
+    byte(c, 0x0f); byte(c, 0xb6); byte(c, 0x0d); /* ecx = state - 1 */
+    repeat_rip32(c, REPEAT_STATE_VA);
+    byte(c, 0xff); byte(c, 0xc9);
+    byte(c, 0x48); byte(c, 0x8d); byte(c, 0x15); /* rdx = rates */
+    repeat_rip32(c, AUTOPLACE_VALUES_VA);
+    byte(c, 0x8b); byte(c, 0x0c); byte(c, 0x8a); /* ecx = rate */
+    byte(c, 0x85); byte(c, 0xc9);
+    byte(c, 0x74); byte(c, 14);                  /* max: store timestamp */
+    byte(c, 0xb8); dword(c, 1000);
+    byte(c, 0x31); byte(c, 0xd2);
+    byte(c, 0xf7); byte(c, 0xf1);                /* eax = 1000 / rate */
+    byte(c, 0x41); byte(c, 0x39); byte(c, 0xc1); /* elapsed < interval */
     byte(c, 0x72); throttle_skip = c->n; byte(c, 0);
     byte(c, 0x44); byte(c, 0x89); byte(c, 0x05); /* last_tick = r8d */
     repeat_rip32(c, REPEAT_TICK_VA);
@@ -604,21 +610,19 @@ static int build_repeat_payload(Code *c) {
     c->reach_entry = c->n;
     byte(c, 0x50);                                  /* push rax */
     byte(c, 0xb8); dword(c, 120);                   /* stock: 15 blocks */
-    byte(c, 0x80); byte(c, 0x3d);
-    next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(RANGE_STATE_VA - next)); byte(c, 1);
-    byte(c, 0x75); byte(c, 5);                     /* not 20 blocks */
-    byte(c, 0xb8); dword(c, 160);                   /* 20 blocks */
-    byte(c, 0x80); byte(c, 0x3d);
-    next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(RANGE_STATE_VA - next)); byte(c, 2);
-    byte(c, 0x75); byte(c, 5);                     /* not 50 blocks */
-    byte(c, 0xb8); dword(c, 400);                   /* 50 blocks */
-    byte(c, 0x80); byte(c, 0x3d);
-    next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(RANGE_STATE_VA - next)); byte(c, 3);
-    byte(c, 0x75); byte(c, 5);                     /* not maximum */
-    byte(c, 0xb8); dword(c, 3584);                  /* 448 blocks */
+    byte(c, 0x0f); byte(c, 0xb6); byte(c, 0x0d);   /* ecx = state */
+    repeat_rip32(c, RANGE_STATE_VA);
+    byte(c, 0x85); byte(c, 0xc9);
+    byte(c, 0x74); byte(c, 26);                    /* stock */
+    byte(c, 0xff); byte(c, 0xc9);
+    byte(c, 0x48); byte(c, 0x8d); byte(c, 0x15);
+    repeat_rip32(c, RANGE_VALUES_VA);
+    byte(c, 0x8b); byte(c, 0x04); byte(c, 0x8a);   /* eax = blocks */
+    byte(c, 0x85); byte(c, 0xc0);
+    byte(c, 0x75); byte(c, 7);
+    byte(c, 0xb8); dword(c, 3584);                  /* unlimited: 448 blocks */
+    byte(c, 0xeb); byte(c, 3);
+    byte(c, 0xc1); byte(c, 0xe0); byte(c, 3);       /* blocks * 8 samples */
     byte(c, 0x39); byte(c, 0xc6);                  /* cmp esi, eax */
     byte(c, 0x75); byte(c, 6);                     /* continue sampling */
     byte(c, 0x58);                                  /* pop rax */
@@ -1329,9 +1333,10 @@ int main(int argc, char **argv) {
     unsigned char check[6], hook[6] = {0xe9,0,0,0,0,0x90};
     unsigned char vertical_add[5], vertical_branch[2];
     unsigned char vertical_store[5];
-    unsigned char repeat_hook[7], section_header[40], section_data[24576];
+    unsigned char repeat_hook[7], section_header[40], section_data[40960];
     unsigned char macro_blob[0x2000];
     unsigned char hud_blob[0x2000];
+    unsigned char config_blob[0x2000];
     unsigned char tower_hook[6];
     unsigned char replace_hook[6], replace_occupied_hook[10], reach_hook[9];
     unsigned char ignore_liquid_hook[13];
@@ -1519,6 +1524,14 @@ int main(int argc, char **argv) {
         return 1;
     }
     memcpy(hud_blob, _binary_hud_payload_bin_start, (size_t)size);
+    memset(config_blob, 0xcc, sizeof config_blob);
+    size = (long)(_binary_config_payload_bin_end -
+                  _binary_config_payload_bin_start);
+    if (size <= 0 || size > (long)sizeof config_blob) {
+        puts("Embedded configuration payload is empty or exceeds 8192 bytes.");
+        return 1;
+    }
+    memcpy(config_blob, _binary_config_payload_bin_start, (size_t)size);
     if (!copy_file(src, dst)) {
         fprintf(stderr, "Could not create output: %s\n", dst);
         return 1;
@@ -1530,9 +1543,9 @@ int main(int argc, char **argv) {
     /* Add an isolated executable section for the unrelated repeat-input hook. */
     memset(section_header, 0, sizeof section_header);
     memcpy(section_header, ".repeat", 7);
-    put32(section_header + 8,  0x6000);     /* VirtualSize */
+    put32(section_header + 8,  0xa000);     /* VirtualSize */
     put32(section_header + 12, 0x46c3000);  /* VirtualAddress */
-    put32(section_header + 16, 0x6000);     /* SizeOfRawData */
+    put32(section_header + 16, 0xa000);     /* SizeOfRawData */
     put32(section_header + 20, NEW_SECTION_RAW_OFF);
     /*
      * The section contains both code and the repeat state/timestamp at
@@ -1545,6 +1558,7 @@ int main(int argc, char **argv) {
     memcpy(section_data + 0x1000, code.b, code.n);
     memcpy(section_data + 0x2000, macro_blob, sizeof macro_blob);
     memcpy(section_data + 0x4000, hud_blob, sizeof hud_blob);
+    memcpy(section_data + 0x8000, config_blob, sizeof config_blob);
     /* Macro pointer, state, anchor, count, slot, and preset counts start empty. */
     memset(section_data + 0x1f00, 0, 0x100);
     section_data[0x7e0] = 0;                /* repeat mode defaults off */
@@ -1560,7 +1574,7 @@ int main(int argc, char **argv) {
     section_data[0x7dc] = 0;                /* ignore liquid defaults off */
     section_data[0x7dd] = 0;                /* extended reach defaults off */
     section_count = 9;
-    size_of_image = 0x46c9000;
+    size_of_image = 0x46cd000;
     fseek(fp, NEW_SECTION_HEADER_OFF, SEEK_SET);
     if (fwrite(section_header, 1, sizeof section_header, fp) !=
         sizeof section_header) {
@@ -1780,8 +1794,8 @@ int main(int argc, char **argv) {
 
     printf("Created: %s\n", dst);
     puts("Flight: V toggle, WASD move, Space up, Ctrl down.");
-    puts("Repeat P cycle: 5/sec, 10/sec, 20/sec, 50/sec, maximum, off.");
-    puts("Reach R cycle: 20 blocks, 50 blocks, maximum practical range, stock.");
+    puts("Repeat P cycle: YAML-configured rates, then off.");
+    puts("Reach R cycle: YAML-configured ranges, then stock.");
     puts("Noclip: N toggle.");
     puts("Replace mode: O toggle (reported in the HUD status panel).");
     puts("Ignore Liquid: I toggle (target through water and lava).");
@@ -1789,5 +1803,6 @@ int main(int argc, char **argv) {
     puts("Area clear: J sets point A, then J arms point B.");
     puts("Macros: M records/stops; 1-0 saves or selects a session preset.");
     puts("Macro recording automatically stops at 32,768 edits.");
+    puts("Runtime configuration: mod-config.yaml beside the generated EXE.");
     return 0;
 }
