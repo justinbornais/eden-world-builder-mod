@@ -14,14 +14,15 @@ The included `eden-mod.exe` is a precompiled copy of the patcher for users witho
 - `K`: After placing auto-fill point A, arm point B as hollow; lines stay solid, rectangles use their perimeter, and prisms use their outer faces.
 - `J`: Start area clear, place point A, press `J` again, then place point B to destroy the inclusive line, rectangle, or rectangular-prism area.
 - Press the active `J`, `K`, or `L` key again before placing its armed point to cancel, or press `Esc` at any time.
-- `P`: Cycle repeated placement/breaking through 5, 10, 20, and 50 per second, then off. This saves having to repeatedly click to place or destroy a block. Works for colors too.
+- `P`: Cycle repeated placement/breaking through 5, 10, 20, 50 per second, and maximum game-update speed, then off. This saves having to repeatedly click to place or destroy a block and works for colors too.
+- `R`: Independently cycle placement/breaking reach through 20 blocks, 50 blocks, the full practical 448-block terrain span, and stock range.
 - `M`: Start recording a persistent macro; press `M` again (or reach 32,768 edits), then press `1`-`0` to save it in that preset.
 - To replay a saved macro, press `M`, press its preset digit before making an edit, then place the anchor block; placements, breaks, block types, and colors replay relative to it.
 - The anchor may use any selected block; replay automatically uses the macro's recorded starting block and restores the user's selection afterward.
 - All ten macro presets persist in `%APPDATA%\Eden\eden_macros.dat`, including placements, deletions, replacements, block types, orientations, and colors.
 - With Caps Lock on, a selected macro remains armed after each placement and number keys switch directly between saved presets; Caps Lock does not affect recording.
 - `Esc` cancels macro mode before its first recorded edit, while waiting to save, or after selecting a replay preset; it does not interrupt a recording that already contains edits.
-- The 20/s repeat mode extends placement and breaking reach from the stock 15 blocks to 20 blocks; 50/s extends it to 50 blocks. Lower repeat modes retain stock reach.
+- Repeat speed no longer changes placement or breaking reach; the independent `R` control selects reach instead.
 - HUD squares show active modes, including a flashing dark-red macro-recording indicator and a solid green ready-to-save/replay indicator.
 - Auto-fill replaces occupied cells and rejects operations larger than 1,048,576 candidate cells.
 - Area clear uses the same 1,048,576-cell ceiling and respects the bedrock-breaking toggle.

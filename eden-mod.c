@@ -81,6 +81,7 @@ static const uint64_t CLEAR_X_VA       =UINT64_C(0x1446c37c4);
 static const uint64_t CLEAR_Y_VA       =UINT64_C(0x1446c37c8);
 static const uint64_t CLEAR_Z_VA       =UINT64_C(0x1446c37cc);
 static const uint64_t IGNORE_LIQUID_STATE_VA=UINT64_C(0x1446c37dc);
+static const uint64_t RANGE_STATE_VA = UINT64_C(0x1446c37dd);
 static const uint64_t LMB_PREV        = UINT64_C(0x1403128ec);
 static const uint64_t PLAYER_PREV_RT  = UINT64_C(0x1408f1dd0);
 static const uint64_t GETTICK_IAT     = UINT64_C(0x1402e7db0);
@@ -295,13 +296,28 @@ static int build_repeat_payload(Code *c) {
     byte(c, 0x74); byte(c, 0x16);                 /* skip state cycle */
     byte(c, 0xfe); byte(c, 0x05);                 /* inc repeat state */
     repeat_rip32(c, REPEAT_STATE_VA);
-    byte(c, 0x80); byte(c, 0x3d);                 /* reached state 5? */
+    byte(c, 0x80); byte(c, 0x3d);                 /* reached state 6? */
     next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 5);
-    byte(c, 0x72); byte(c, 7);                    /* states 1-4: keep */
-    byte(c, 0xc6); byte(c, 0x05);                 /* state 5 -> off */
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 6);
+    byte(c, 0x72); byte(c, 7);                    /* states 1-5: keep */
+    byte(c, 0xc6); byte(c, 0x05);                 /* state 6 -> off */
     next = REPEAT_CODE_VA + c->n + 5;
     dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 0);
+
+    /* R independently cycles reach: 20, 50, practical maximum, stock. */
+    byte(c, 0xb9); dword(c, 0x52);                 /* mov ecx, VK_R */
+    byte(c, 0xff); byte(c, 0x15); repeat_rip32(c, GETKEY_IAT);
+    byte(c, 0xa8); byte(c, 1);
+    byte(c, 0x74); byte(c, 0x16);
+    byte(c, 0xfe); byte(c, 0x05);
+    repeat_rip32(c, RANGE_STATE_VA);
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(RANGE_STATE_VA - next)); byte(c, 4);
+    byte(c, 0x72); byte(c, 7);
+    byte(c, 0xc6); byte(c, 0x05);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(RANGE_STATE_VA - next)); byte(c, 0);
 
     /* B independently toggles permission to destroy block ID 1 (bedrock). */
     byte(c, 0xb9); dword(c, 0x42);                 /* mov ecx, VK_B */
@@ -468,6 +484,11 @@ static int build_repeat_payload(Code *c) {
     next = REPEAT_CODE_VA + c->n + 5;
     dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 4);
     byte(c, 0x0f); byte(c, 0x44); byte(c, 0xca);
+    byte(c, 0x31); byte(c, 0xd2);                 /* state 5: every update */
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 5);
+    byte(c, 0x0f); byte(c, 0x44); byte(c, 0xca);
     byte(c, 0x39); byte(c, 0xc8);                 /* cmp eax, ecx */
     byte(c, 0x72); throttle_skip = c->n; byte(c, 0);
     byte(c, 0x44); byte(c, 0x89); byte(c, 0x05); /* last_tick = r8d */
@@ -620,7 +641,9 @@ static int build_repeat_payload(Code *c) {
     /*
      * findWorldCoords samples the targeting ray every 0.125 block. The stock
      * loop limit is 120 samples (a nominal 15-block reach). Keep that limit
-     * for off/5/sec/10/sec, use 160 samples for 20/sec, and 400 for 50/sec.
+     * independently select stock, 20-block, 50-block, or the full practical
+     * 448-block active-terrain span.  The last mode remains finite so aiming
+     * into empty sky cannot trap the game in an unbounded ray-march.
      * Preserve eax because the original compare only changed flags.
      */
     c->reach_entry = c->n;
@@ -628,14 +651,19 @@ static int build_repeat_payload(Code *c) {
     byte(c, 0xb8); dword(c, 120);                   /* stock: 15 blocks */
     byte(c, 0x80); byte(c, 0x3d);
     next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 3);
-    byte(c, 0x75); byte(c, 5);                     /* not 20/sec */
+    dword(c, (int32_t)(RANGE_STATE_VA - next)); byte(c, 1);
+    byte(c, 0x75); byte(c, 5);                     /* not 20 blocks */
     byte(c, 0xb8); dword(c, 160);                   /* 20 blocks */
     byte(c, 0x80); byte(c, 0x3d);
     next = REPEAT_CODE_VA + c->n + 5;
-    dword(c, (int32_t)(REPEAT_STATE_VA - next)); byte(c, 4);
-    byte(c, 0x75); byte(c, 5);                     /* not 50/sec */
+    dword(c, (int32_t)(RANGE_STATE_VA - next)); byte(c, 2);
+    byte(c, 0x75); byte(c, 5);                     /* not 50 blocks */
     byte(c, 0xb8); dword(c, 400);                   /* 50 blocks */
+    byte(c, 0x80); byte(c, 0x3d);
+    next = REPEAT_CODE_VA + c->n + 5;
+    dword(c, (int32_t)(RANGE_STATE_VA - next)); byte(c, 3);
+    byte(c, 0x75); byte(c, 5);                     /* not maximum */
+    byte(c, 0xb8); dword(c, 3584);                  /* 448 blocks */
     byte(c, 0x39); byte(c, 0xc6);                  /* cmp esi, eax */
     byte(c, 0x75); byte(c, 6);                     /* continue sampling */
     byte(c, 0x58);                                  /* pop rax */
@@ -1058,10 +1086,10 @@ static void hud_finish_skip(Code *c, size_t displacement) {
 }
 
 static int build_hud_payload(Code *c) {
-    size_t skip_hud, skip_f, skip_n, skip_p, skip_o, skip_fill, skip_clear;
+    size_t skip_hud, skip_f, skip_n, skip_p, skip_range, skip_o, skip_fill, skip_clear;
     size_t skip_macro, skip_liquid;
-    size_t state2_jump, state3_jump, state4_jump;
-    size_t color_done1, color_done2, color_done3;
+    size_t state2_jump, state3_jump, state4_jump, state5_jump;
+    size_t color_done1, color_done2, color_done3, color_done4;
     size_t original_epilogue;
     memset(c, 0, sizeof *c);
     byte(c, 0x80); byte(c, 0x3d);                 /* gameplay capture only */
@@ -1095,7 +1123,7 @@ static int build_hud_payload(Code *c) {
     hud_finish_skip(c, skip_n);
 
     skip_p = hud_skip_if_zero(c, REPEAT_STATE_VA);
-    /* 5/sec bright blue, 10/sec deep blue, 20/sec orange, 50/sec deep red. */
+    /* 5/s bright blue, 10/s deep blue, 20/s orange, 50/s deep red, max darker red. */
     byte(c, 0x80); byte(c, 0x3d);
     {
         uint64_t next = HUD_CODE_VA + c->n + 5;
@@ -1117,6 +1145,13 @@ static int build_hud_payload(Code *c) {
     }
     byte(c, 4);
     byte(c, 0x0f); byte(c, 0x84); state4_jump = c->n; dword(c, 0);
+    byte(c, 0x80); byte(c, 0x3d);
+    {
+        uint64_t next = HUD_CODE_VA + c->n + 5;
+        dword(c, (int32_t)(REPEAT_STATE_VA - next));
+    }
+    byte(c, 5);
+    byte(c, 0x0f); byte(c, 0x84); state5_jump = c->n; dword(c, 0);
     hud_color(c, 0.10f, 0.55f, 1.00f);
     byte(c, 0xe9); color_done1 = c->n; dword(c, 0);
     {
@@ -1136,6 +1171,12 @@ static int build_hud_payload(Code *c) {
         memcpy(c->b + state4_jump, &rel, sizeof rel);
     }
     hud_color(c, 0.65f, 0.02f, 0.02f);
+    byte(c, 0xe9); color_done4 = c->n; dword(c, 0);
+    {
+        int32_t rel = (int32_t)(c->n - (state5_jump + 4));
+        memcpy(c->b + state5_jump, &rel, sizeof rel);
+    }
+    hud_color(c, 0.30f, 0.00f, 0.00f);
     {
         int32_t rel = (int32_t)(c->n - (color_done1 + 4));
         memcpy(c->b + color_done1, &rel, sizeof rel);
@@ -1143,13 +1184,45 @@ static int build_hud_payload(Code *c) {
         memcpy(c->b + color_done2, &rel, sizeof rel);
         rel = (int32_t)(c->n - (color_done3 + 4));
         memcpy(c->b + color_done3, &rel, sizeof rel);
+        rel = (int32_t)(c->n - (color_done4 + 4));
+        memcpy(c->b + color_done4, &rel, sizeof rel);
     }
     hud_rect(c, 50, 4, 68, 22);
     hud_finish_skip(c, skip_p);
 
+    skip_range = hud_skip_if_zero(c, RANGE_STATE_VA);
+    {
+        size_t range2, range3, done1, done2;
+        byte(c, 0x80); byte(c, 0x3d);
+        {
+            uint64_t next = HUD_CODE_VA + c->n + 5;
+            dword(c, (int32_t)(RANGE_STATE_VA - next));
+        }
+        byte(c, 2);
+        byte(c, 0x0f); byte(c, 0x84); range2 = c->n; dword(c, 0);
+        byte(c, 0x80); byte(c, 0x3d);
+        {
+            uint64_t next = HUD_CODE_VA + c->n + 5;
+            dword(c, (int32_t)(RANGE_STATE_VA - next));
+        }
+        byte(c, 3);
+        byte(c, 0x0f); byte(c, 0x84); range3 = c->n; dword(c, 0);
+        hud_color(c, 0.45f, 1.00f, 0.45f);         /* 20: light green */
+        byte(c, 0xe9); done1 = c->n; dword(c, 0);
+        local32(c, range2, c->n);
+        hud_color(c, 0.05f, 0.72f, 0.12f);         /* 50: green */
+        byte(c, 0xe9); done2 = c->n; dword(c, 0);
+        local32(c, range3, c->n);
+        hud_color(c, 0.00f, 0.28f, 0.04f);         /* maximum: deep green */
+        local32(c, done1, c->n);
+        local32(c, done2, c->n);
+    }
+    hud_rect(c, 73, 4, 91, 22);
+    hud_finish_skip(c, skip_range);
+
     skip_o = hud_skip_if_zero(c, REPLACE_STATE_VA);
     hud_color(c, 1.00f, 0.05f, 0.55f);           /* vibrant pink */
-    hud_rect(c, 73, 4, 91, 22);
+    hud_rect(c, 96, 4, 114, 22);
     hud_finish_skip(c, skip_o);
 
     skip_fill = hud_skip_if_zero(c, AUTOFILL_STATE_VA);
@@ -1168,7 +1241,7 @@ static int build_hud_payload(Code *c) {
         hud_color(c, 1.00f, 0.38f, 0.01f);         /* point A set: orange */
         local32(c, color_done, c->n);
     }
-    hud_rect(c, 96, 4, 114, 22);
+    hud_rect(c, 119, 4, 137, 22);
     hud_finish_skip(c, skip_fill);
 
     skip_clear = hud_skip_if_zero(c, CLEAR_STATE_VA);
@@ -1187,7 +1260,7 @@ static int build_hud_payload(Code *c) {
         hud_color(c, 0.38f, 0.16f, 0.03f);         /* point A set: brown */
         local32(c, color_done, c->n);
     }
-    hud_rect(c, 119, 4, 137, 22);
+    hud_rect(c, 142, 4, 160, 22);
     hud_finish_skip(c, skip_clear);
 
     skip_macro = hud_skip_if_zero(c, MACRO_STATE_VA);
@@ -1218,12 +1291,12 @@ static int build_hud_payload(Code *c) {
         hud_color(c, 0.05f, 0.90f, 0.18f);
         local32(c, color_done, c->n);
     }
-    hud_rect(c, 142, 4, 160, 22);
+    hud_rect(c, 165, 4, 183, 22);
     hud_finish_skip(c, skip_macro);
 
     skip_liquid = hud_skip_if_zero(c, IGNORE_LIQUID_STATE_VA);
     hud_color(c, 0.00f, 0.90f, 0.95f);            /* bright aqua */
-    hud_rect(c, 165, 4, 183, 22);
+    hud_rect(c, 188, 4, 206, 22);
     hud_finish_skip(c, skip_liquid);
 
     hud_gl_cap(c, 0x8076, UINT64_C(0x1400127b0)); /* restore color array */
@@ -1243,7 +1316,7 @@ static int build_hud_payload(Code *c) {
     byte(c, 0x41); byte(c, 0x5e);
     byte(c, 0x41); byte(c, 0x5f);
     byte(c, 0xc3);
-    return c->n < 0xe00;
+    return c->n < 0x800;
 }
 
 static int copy_file(const char *src, const char *dst) {
@@ -1533,6 +1606,7 @@ int main(int argc, char **argv) {
     put32(section_data + 0x7d4, 0x3f4ccccd); /* horizontal coast: 0.8 */
     put32(section_data + 0x7d8, 0x3f7851ec); /* vertical coast: 0.97 */
     section_data[0x7dc] = 0;                /* ignore liquid defaults off */
+    section_data[0x7dd] = 0;                /* extended reach defaults off */
     section_count = 9;
     size_of_image = 0x46c7000;
     fseek(fp, NEW_SECTION_HEADER_OFF, SEEK_SET);
@@ -1773,7 +1847,8 @@ int main(int argc, char **argv) {
 
     printf("Created: %s\n", dst);
     puts("Flight: V toggle, WASD move, Space up, Ctrl down.");
-    puts("Repeat P cycle: 5/sec, 10/sec, 20/sec, 50/sec, off.");
+    puts("Repeat P cycle: 5/sec, 10/sec, 20/sec, 50/sec, maximum, off.");
+    puts("Reach R cycle: 20 blocks, 50 blocks, maximum practical range, stock.");
     puts("Bedrock breaking: B toggle.");
     puts("Noclip: N toggle.");
     puts("Replace mode: O toggle (vibrant-pink HUD indicator).");
