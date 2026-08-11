@@ -161,7 +161,9 @@ try_hmax:
     test eax, eax
     jz read_line
     movss dword ptr [rip + HORIZONTAL_MAX], xmm0
-    xorps xmm0, xmmword ptr [rip + SIGN_MASK]
+    movd eax, xmm0
+    xor eax, 0x80000000
+    movd xmm0, eax
     movss dword ptr [rip + HORIZONTAL_MAX_NEG], xmm0
     jmp read_line
 try_vacc:
@@ -175,7 +177,9 @@ try_vacc:
     test eax, eax
     jz read_line
     movss dword ptr [rip + VERTICAL_ACCEL], xmm0
-    xorps xmm0, xmmword ptr [rip + SIGN_MASK]
+    movd eax, xmm0
+    xor eax, 0x80000000
+    movd xmm0, eax
     movss dword ptr [rip + VERTICAL_ACCEL_NEG], xmm0
     jmp read_line
 try_vdecel:
@@ -201,7 +205,9 @@ try_vmax:
     test eax, eax
     jz read_line
     movss dword ptr [rip + VERTICAL_MAX], xmm0
-    xorps xmm0, xmmword ptr [rip + SIGN_MASK]
+    movd eax, xmm0
+    xor eax, 0x80000000
+    movd xmm0, eax
     movss dword ptr [rip + VERTICAL_MAX_NEG], xmm0
     jmp read_line
 config_close:
@@ -438,7 +444,6 @@ key_vmax:         .asciz "flight_vertical_max_speed:"
 FLOAT_ZERO: .float 0.0
 FLOAT_ONE: .float 1.0
 FLOAT_LIMIT: .float 1000000.0
-SIGN_MASK: .long 0x80000000, 0, 0, 0
 
 .org 0x1000, 0
 /* Defaults used when the optional file is absent or unreadable. */
