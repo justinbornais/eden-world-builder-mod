@@ -8,7 +8,6 @@ A binary patcher for the 64-bit v1.5.0 release of Eden World Builder. The includ
 | --- | --- |
 | `V` | Toggle flight; use WASD, Space, and Ctrl to move. |
 | `N` | Toggle noclip through all blocks. |
-| `B` | Toggle bedrock breaking. |
 | `O` | Toggle replace mode, which places into the targeted block. |
 | `I` | Toggle targeting through water and lava; underwater breaks refill from adjacent water. |
 | `P` | Cycle repeat speed: 5/s, 10/s, 20/s, 50/s, maximum, then off. |
@@ -23,7 +22,7 @@ A binary patcher for the 64-bit v1.5.0 release of Eden World Builder. The includ
 - Macros preserve placements, breaks, replacements, block types, orientations, and colors in `%APPDATA%\Eden\eden_macros.dat`.
 - With Caps Lock enabled, a selected macro remains armed for repeated placement and number keys switch presets directly.
 - Flight keeps the original acceleration rate but has a substantially higher maximum speed.
-- HUD squares indicate active modes and their current states.
+- A persistent text panel reports every mode and its current state.
 
 ## Build
 

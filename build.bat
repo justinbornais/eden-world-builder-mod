@@ -19,10 +19,10 @@ if not exist "%EDEN_SOURCE%" (
     exit /b 1
 )
 
-echo [1/6] Assembling macro payload...
+echo [1/9] Assembling macro payload...
 as -o macro-payload.o macro-payload.S || goto :failed
 
-echo [2/6] Linking macro payload...
+echo [2/9] Linking macro payload...
 ld -mi386pep --image-base 0x1446c4000 -e macro_input ^
   --defsym GETKEY_IAT=0x1402e7bb8 ^
   --defsym CALLOC_IAT=0x1402e82d0 ^
@@ -44,17 +44,48 @@ ld -mi386pep --image-base 0x1446c4000 -e macro_input ^
   --defsym META=0x1446c4f00 ^
   -o macro-payload.exe macro-payload.o || goto :failed
 
-echo [3/6] Extracting payload bytes...
+echo [3/9] Extracting macro payload bytes...
 objcopy -O binary -j .text macro-payload.exe macro-payload.bin || goto :failed
 
-echo [4/6] Embedding payload in the standalone patcher...
+echo [4/9] Assembling and linking HUD payload...
+as -o hud-payload.o hud-payload.S || goto :failed
+rem PE/COFF places .text one 0x1000 page above the image base; the extracted
+rem payload itself is copied to 0x1446c7000 in the target executable.
+ld -mi386pep --image-base 0x1446c6000 -e mod_hud ^
+  --defsym HUD_BEGIN=0x1400ceaa0 ^
+  --defsym HUD_END=0x1400cea40 ^
+  --defsym STATUS_CTOR_RECT=0x1400e0810 ^
+  --defsym STATUS_FONT_FIT=0x1400e08b0 ^
+  --defsym STATUS_SET=0x1400e0cb0 ^
+  --defsym STATUS_RENDER=0x1400e1140 ^
+  --defsym GETTICK_IAT=0x1402e7db0 ^
+  --defsym MOUSE_CAPTURED=0x1403128b0 ^
+  --defsym FLY_MODE=0x1408f19b8 ^
+  --defsym NOCLIP_STATE=0x1446c37e9 ^
+  --defsym REPEAT_STATE=0x1446c37e0 ^
+  --defsym RANGE_STATE=0x1446c37dd ^
+  --defsym REPLACE_STATE=0x1446c37ea ^
+  --defsym AUTOFILL_STATE=0x1446c37eb ^
+  --defsym CLEAR_STATE=0x1446c37c0 ^
+  --defsym MACRO_STATE=0x1446c4f08 ^
+  --defsym IGNORE_LIQUID_STATE=0x1446c37dc ^
+  -o hud-payload.exe hud-payload.o || goto :failed
+objcopy -O binary -j .text hud-payload.exe hud-payload.bin || goto :failed
+
+echo [5/9] Embedding payloads in the standalone patcher...
 objcopy -I binary -O pe-x86-64 -B i386:x86-64 macro-payload.bin macro-blob.o || goto :failed
+objcopy -I binary -O pe-x86-64 -B i386:x86-64 hud-payload.bin hud-blob.o || goto :failed
 
-echo [5/6] Compiling patcher...
-gcc -O2 -Wall -Wextra -o eden-mod.exe eden-mod.c macro-blob.o || goto :failed
+echo [6/9] Compiling patcher...
+gcc -O2 -Wall -Wextra -o eden-mod.exe eden-mod.c macro-blob.o hud-blob.o || goto :failed
 
-echo [6/6] Building "%EDEN_OUTPUT%"...
+echo [7/9] Building "%EDEN_OUTPUT%"...
 eden-mod.exe "%EDEN_SOURCE%" "%EDEN_OUTPUT%" || goto :failed
+
+echo [8/9] Verifying output exists...
+if not exist "%EDEN_OUTPUT%" goto :failed
+
+echo [9/9] Cleaning temporary build files...
 
 call :cleanup
 echo Build complete: "%EDEN_OUTPUT%"
@@ -68,4 +99,5 @@ exit /b %BUILD_ERROR%
 
 :cleanup
 del /q macro-payload.o macro-payload.exe macro-payload.bin macro-blob.o 2>nul
+del /q hud-payload.o hud-payload.exe hud-payload.bin hud-blob.o 2>nul
 exit /b 0
