@@ -1,44 +1,38 @@
-# Eden - World Builder Mod
+# Eden World Builder Mod
 
-This patcher targets the original 64-bit Eden World Builder v1.5.0 executable.
-The included `eden-mod.exe` is a precompiled copy of the patcher for users without GCC.
+A binary patcher for the 64-bit v1.5.0 release of Eden World Builder. The included `eden-mod.exe` is a standalone, precompiled patcher.
 
 ## Features
 
-- `V`: Toggle flight. Move with WASD, Space to go up, and Ctrl to go down.
-- `N`: Toggle collision-free/noclip movement through blocks, including bedrock.
-- `O`: Toggle replace mode. Placing replaces the block under the crosshair instead of adding beside it; coloring continues to work normally.
-- `I`: Toggle Ignore Liquid so targeting for placement, destruction, and replacement passes through water and lava to the first non-liquid block behind them.
-- Blocks destroyed through water while Ignore Liquid is active refill with water when directly adjacent to an existing water cell.
-- `L`: Start auto-fill, place point A, press `L` again, then place point B to draw a filled line, rectangle, or rectangular prism.
-- `K`: After placing auto-fill point A, arm point B as hollow; lines stay solid, rectangles use their perimeter, and prisms use their outer faces.
-- `J`: Start area clear, place point A, press `J` again, then place point B to destroy the inclusive line, rectangle, or rectangular-prism area.
-- Press the active `J`, `K`, or `L` key again before placing its armed point to cancel, or press `Esc` at any time.
-- `P`: Cycle repeated placement/breaking through 5, 10, 20, 50 per second, and maximum game-update speed, then off. This saves having to repeatedly click to place or destroy a block and works for colors too.
-- `R`: Independently cycle placement/breaking reach through 20 blocks, 50 blocks, the full practical 448-block terrain span, and stock range.
-- `M`: Start recording a persistent macro; press `M` again (or reach 32,768 edits), then press `1`-`0` to save it in that preset.
-- To replay a saved macro, press `M`, press its preset digit before making an edit, then place the anchor block; placements, breaks, block types, and colors replay relative to it.
-- The anchor may use any selected block; replay automatically uses the macro's recorded starting block and restores the user's selection afterward.
-- All ten macro presets persist in `%APPDATA%\Eden\eden_macros.dat`, including placements, deletions, replacements, block types, orientations, and colors.
-- With Caps Lock on, a selected macro remains armed after each placement and number keys switch directly between saved presets; Caps Lock does not affect recording.
-- `Esc` cancels macro mode before its first recorded edit, while waiting to save, or after selecting a replay preset; it does not interrupt a recording that already contains edits.
-- Repeat speed no longer changes placement or breaking reach; the independent `R` control selects reach instead.
-- HUD squares show active modes, including a flashing dark-red macro-recording indicator and a solid green ready-to-save/replay indicator.
-- Auto-fill replaces occupied cells and rejects operations larger than 1,048,576 candidate cells.
-- Area clear uses the same 1,048,576-cell ceiling and respects the bedrock-breaking toggle.
-- The J indicator is deep red while armed and brown while waiting after point A.
-- Flight retains its existing acceleration rate but has a dramatically higher terminal speed.
+| Key | Feature |
+| --- | --- |
+| `V` | Toggle flight; use WASD, Space, and Ctrl to move. |
+| `N` | Toggle noclip through all blocks. |
+| `B` | Toggle bedrock breaking. |
+| `O` | Toggle replace mode, which places into the targeted block. |
+| `I` | Toggle targeting through water and lava; underwater breaks refill from adjacent water. |
+| `P` | Cycle repeat speed: 5/s, 10/s, 20/s, 50/s, maximum, then off. |
+| `R` | Cycle reach: 20 blocks, 50 blocks, maximum practical range, then stock. |
+| `L` | Select two points and build a filled line, rectangle, or rectangular prism. |
+| `K` | After selecting auto-fill point A, build a hollow shape at point B. |
+| `J` | Select two points and clear the enclosed area. |
+| `M` | Record, save, and replay persistent macros using presets `1`-`0`. |
 
-The patcher checks the input binary before writing and refuses unsupported or already-patched inputs.
+- Press the active `J`, `K`, or `L` key again before placing its next point, or press `Esc`, to cancel the operation.
+- Fill and clear operations replace or remove up to 1,048,576 blocks; hollow lines remain solid, rectangles use their perimeter, and prisms use their outer faces.
+- Macros preserve placements, breaks, replacements, block types, orientations, and colors in `%APPDATA%\Eden\eden_macros.dat`.
+- With Caps Lock enabled, a selected macro remains armed for repeated placement and number keys switch presets directly.
+- Flight keeps the original acceleration rate but has a substantially higher maximum speed.
+- HUD squares indicate active modes and their current states.
 
 ## Build
 
-With the MSYS2 MinGW64 tools (`as`, `ld`, `objcopy`, and `gcc`) on `PATH`, run:
+Place the original game at `Eden - World Builder.exe`, install the MSYS2 MinGW64 tools (`as`, `ld`, `objcopy`, and `gcc`), and run:
 
 ```powershell
 .\build.bat
 ```
 
-This reads `Eden - World Builder.exe`, creates `Eden - Modded.exe`, and removes intermediate files; optional input and output paths can be supplied as the first and second arguments.
+This rebuilds the standalone patcher and creates `Eden - Modded.exe`. Optional source and output paths may be supplied as the first and second arguments.
 
-The generated `eden-mod.exe` embeds its macro payload and is standalone; release users do not need `macro-payload.S` or any other build artifact.
+The patcher validates the input executable and refuses unsupported or already-modified builds.
