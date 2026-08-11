@@ -12,3 +12,12 @@ range_presets: [20, 50, 100, unlimited]
 # Additional safe interface and macro preferences.
 status_panel: true
 caps_lock_macro_repeat: true
+
+# Acceleration is added per update. Deceleration is momentum retained while
+# coasting: 0 stops instantly and 1 never slows.
+flight_horizontal_acceleration: 2.5
+flight_horizontal_deceleration: 0.8
+flight_horizontal_max_speed: 5000
+flight_vertical_acceleration: 0.2
+flight_vertical_deceleration: 0.97
+flight_vertical_max_speed: 5000

@@ -34,6 +34,9 @@ enum {
     FLY_XZ_SPEED_OFF = 0x2b6d90,
     FLY_DRAG_OFF = 0x2b6e20,
     FLY_Y_SPEED_OFF  = 0x2b6e38,
+    FLY_XZ_ACCEL_REF_OFF = 0xabf9b,
+    FLY_Y_UP_REF_OFF = 0xac6f4,
+    FLY_Y_DOWN_REF_OFF = 0xac70a,
     VERTICAL_ADD_OFF = 0xac6f8,
     VERTICAL_STORE_BRANCH_OFF = 0xac704,
     VERTICAL_STORE_OFF = 0xac70e,
@@ -69,6 +72,13 @@ static const uint64_t MOVE_X     = UINT64_C(0x140312a34);
 static const uint64_t MOVE_Y     = UINT64_C(0x140312a38);
 static const uint64_t HORIZONTAL_DRAG = UINT64_C(0x1446c37d4);
 static const uint64_t VERTICAL_DRAG   = UINT64_C(0x1446c37d8);
+static const uint64_t HORIZONTAL_ACCEL= UINT64_C(0x1446cc050);
+static const uint64_t VERTICAL_ACCEL  = UINT64_C(0x1446cc060);
+static const uint64_t VERTICAL_ACCEL_NEG=UINT64_C(0x1446cc064);
+static const uint64_t HORIZONTAL_MAX  = UINT64_C(0x1446cc068);
+static const uint64_t HORIZONTAL_MAX_NEG=UINT64_C(0x1446cc06c);
+static const uint64_t VERTICAL_MAX    = UINT64_C(0x1446cc070);
+static const uint64_t VERTICAL_MAX_NEG= UINT64_C(0x1446cc074);
 static const uint64_t REPEAT_STATE_VA = UINT64_C(0x1446c37e0);
 static const uint64_t REPEAT_TICK_VA  = UINT64_C(0x1446c37e4);
 static const uint64_t NOCLIP_STATE_VA = UINT64_C(0x1446c37e9);
@@ -192,6 +202,32 @@ static void stop_flight_without_move_input(Code *c) {
     c->b[input_skip] = (unsigned char)(end - input_skip - 1);
 }
 
+static void clamp_horizontal_flight_speed(Code *c) {
+    static const unsigned char load_player[] = {0x48,0x8b,0x54,0x24,0x30};
+    static const unsigned char load_x[] = {0xf3,0x0f,0x10,0x42,0x24};
+    static const unsigned char load_z[] = {0xf3,0x0f,0x10,0x42,0x2c};
+    static const unsigned char minss[] = {0xf3,0x0f,0x5d,0x05};
+    static const unsigned char maxss[] = {0xf3,0x0f,0x5f,0x05};
+    static const unsigned char store_x[] = {0xf3,0x0f,0x11,0x42,0x24};
+    static const unsigned char store_z[] = {0xf3,0x0f,0x11,0x42,0x2c};
+    size_t skip;
+    uint64_t next;
+    byte(c, 0x80); byte(c, 0x3d);
+    next = CAVE_VA + c->n + 5;
+    dword(c, (int32_t)(FLY_MODE - next)); byte(c, 1);
+    byte(c, 0x75); skip = c->n; byte(c, 0);
+    bytes(c, load_player, sizeof load_player);
+    bytes(c, load_x, sizeof load_x);
+    bytes(c, minss, sizeof minss); rip32(c, HORIZONTAL_MAX);
+    bytes(c, maxss, sizeof maxss); rip32(c, HORIZONTAL_MAX_NEG);
+    bytes(c, store_x, sizeof store_x);
+    bytes(c, load_z, sizeof load_z);
+    bytes(c, minss, sizeof minss); rip32(c, HORIZONTAL_MAX);
+    bytes(c, maxss, sizeof maxss); rip32(c, HORIZONTAL_MAX_NEG);
+    bytes(c, store_z, sizeof store_z);
+    c->b[skip] = (unsigned char)(c->n - skip - 1);
+}
+
 static int build_payload(Code *c) {
     static const unsigned char save[] = {
         0x51,                             /* push rcx; align stack */
@@ -214,6 +250,7 @@ static int build_payload(Code *c) {
     call_get_key(c, 0x20, FLY_UP);       /* VK_SPACE */
     call_get_key(c, 0x11, FLY_DOWN);     /* VK_CONTROL */
     stop_flight_without_move_input(c);
+    clamp_horizontal_flight_speed(c);
     bytes(c, restore, sizeof restore);
     bytes(c, jmp, sizeof jmp);
     dword(c, (int32_t)((UPDATE_VA + 6) - (CAVE_VA + c->n + 4)));
@@ -236,12 +273,16 @@ static int build_payload(Code *c) {
         byte(c, 0);
         bytes(c, skip_drag, sizeof skip_drag);
         bytes(c, mul_vertical, sizeof mul_vertical); rip32(c, VERTICAL_DRAG);
+        bytes(c, (const unsigned char[]){0xf3,0x0f,0x5d,0x05}, 4);
+        rip32(c, VERTICAL_MAX);
+        bytes(c, (const unsigned char[]){0xf3,0x0f,0x5f,0x05}, 4);
+        rip32(c, VERTICAL_MAX_NEG);
         bytes(c, store_vertical, sizeof store_vertical);
         bytes(c, jmp, sizeof jmp);
         dword(c, (int32_t)(UINT64_C(0x1400ad313) -
                            (CAVE_VA + c->n + 4)));
     }
-    return c->n <= 186;
+    return c->n <= 2048;
 }
 
 static void repeat_rip32(Code *c, uint64_t target) {
@@ -1710,8 +1751,8 @@ int main(int argc, char **argv) {
         fclose(fp); puts("Failed while installing null-texture guard."); return 1;
     }
 
-    /* Reduced horizontal acceleration and gentler vertical acceleration.
-       Walking constants are not changed. */
+    /* Default flight values; runtime references are redirected to writable
+       configuration storage below. Walking constants are not changed. */
     speed_words[0] = 0x40200000;
     speed_words[1] = 0x40200000;
     fseek(fp, FLY_XZ_SPEED_OFF, SEEK_SET);
@@ -1719,11 +1760,10 @@ int main(int argc, char **argv) {
         fclose(fp); puts("Failed while writing horizontal flight speed."); return 1;
     }
     /*
-     * Preserve the 2.5-unit acceleration above, but reduce in-flight damping
-     * from 0.995 to 0.9995. This raises terminal flight speed about tenfold
-     * without changing the acceleration applied by movement input.
+     * A hard configurable cap now defines maximum speed, so native in-flight
+     * damping is disabled. Configurable coast multipliers handle deceleration.
      */
-    fly_drag_word = 0x3f7fdf3b; /* 0.9995f */
+    fly_drag_word = 0x3f800000; /* 1.0f */
     fseek(fp, FLY_DRAG_OFF, SEEK_SET);
     if (fwrite(&fly_drag_word, 1, sizeof fly_drag_word, fp) !=
         sizeof fly_drag_word) {
@@ -1735,6 +1775,24 @@ int main(int argc, char **argv) {
     fseek(fp, FLY_Y_SPEED_OFF, SEEK_SET);
     if (fwrite(speed_words, 1, sizeof speed_words, fp) != sizeof speed_words) {
         fclose(fp); puts("Failed while writing vertical flight speed."); return 1;
+    }
+    rel = (int32_t)(HORIZONTAL_ACCEL - UINT64_C(0x1400acb9f));
+    fseek(fp, FLY_XZ_ACCEL_REF_OFF, SEEK_SET);
+    if (fwrite(&rel, 1, sizeof rel, fp) != sizeof rel) {
+        fclose(fp); puts("Failed while configuring horizontal acceleration.");
+        return 1;
+    }
+    rel = (int32_t)(VERTICAL_ACCEL - UINT64_C(0x1400ad2f8));
+    fseek(fp, FLY_Y_UP_REF_OFF, SEEK_SET);
+    if (fwrite(&rel, 1, sizeof rel, fp) != sizeof rel) {
+        fclose(fp); puts("Failed while configuring upward acceleration.");
+        return 1;
+    }
+    rel = (int32_t)(VERTICAL_ACCEL_NEG - UINT64_C(0x1400ad30e));
+    fseek(fp, FLY_Y_DOWN_REF_OFF, SEEK_SET);
+    if (fwrite(&rel, 1, sizeof rel, fp) != sizeof rel) {
+        fclose(fp); puts("Failed while configuring downward acceleration.");
+        return 1;
     }
     /*
      * Turn Eden's fixed vertical assignment into accumulation. When the up

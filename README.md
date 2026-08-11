@@ -21,14 +21,16 @@ A binary patcher for the 64-bit v1.5.0 release of Eden World Builder. The includ
 - Fill and clear operations replace or remove up to 1,048,576 blocks; hollow lines remain solid, rectangles use their perimeter, and prisms use their outer faces.
 - Macros preserve placements, breaks, replacements, block types, orientations, and colors in `%APPDATA%\Eden\eden_macros.dat`.
 - With Caps Lock enabled, a selected macro remains armed for repeated placement and number keys switch presets directly.
-- Flight keeps the original acceleration rate but has a substantially higher maximum speed.
+- Flight has independently configurable horizontal and vertical acceleration, coasting deceleration, and maximum speed.
 - A persistent text panel reports every mode and its current state.
 
 ## Configuration
 
 `mod-config.yaml` is optional; when it is absent, the mod uses its built-in defaults.
 
-When placed beside `Eden - Modded.exe`, the YAML file supports up to eight ordered `autoplace_presets` and `range_presets`, plus `status_panel` and `caps_lock_macro_repeat`; use `max` for every-update placement and `unlimited` for Eden's practical reach limit.
+When placed beside `Eden - Modded.exe`, the YAML file supports up to eight ordered `autoplace_presets` and `range_presets`, plus `status_panel`, `caps_lock_macro_repeat`, and separate horizontal/vertical flight acceleration, deceleration, and maximum-speed values; use `max` for every-update placement and `unlimited` for Eden's practical reach limit.
+
+Flight acceleration is added per game update; deceleration is a coast multiplier from `0` (instant stop) to `1` (no momentum loss), and maximum speed is a positive hard cap.
 
 ## Build
 

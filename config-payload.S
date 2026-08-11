@@ -6,6 +6,9 @@
 .extern FGETS_IAT
 .extern FCLOSE_IAT
 .extern STRTOL_IAT
+.extern STRTOF_IAT
+.extern HORIZONTAL_DRAG
+.extern VERTICAL_DRAG
 
 /* Load optional mod-config.yaml once; embedded defaults need no file. */
 .global config_init
@@ -113,12 +116,93 @@ try_caps:
     lea rdx, [rip + key_caps]
     call match_key
     test rax, rax
-    jz read_line
+    jz try_hacc
     mov rcx, rax
     call parse_bool
     cmp eax, -1
     je read_line
     mov byte ptr [rip + CAPS_REPEAT_ENABLED], al
+    jmp read_line
+try_hacc:
+    mov rcx, rsi
+    lea rdx, [rip + key_hacc]
+    call match_key
+    test rax, rax
+    jz try_hdecel
+    mov rcx, rax
+    call parse_positive
+    test eax, eax
+    jz read_line
+    movss dword ptr [rip + HORIZONTAL_ACCEL], xmm0
+    movss dword ptr [rip + HORIZONTAL_ACCEL + 4], xmm0
+    movss dword ptr [rip + HORIZONTAL_ACCEL + 8], xmm0
+    movss dword ptr [rip + HORIZONTAL_ACCEL + 12], xmm0
+    jmp read_line
+try_hdecel:
+    mov rcx, rsi
+    lea rdx, [rip + key_hdecel]
+    call match_key
+    test rax, rax
+    jz try_hmax
+    mov rcx, rax
+    call parse_coast
+    test eax, eax
+    jz read_line
+    movss dword ptr [rip + HORIZONTAL_DRAG], xmm0
+    jmp read_line
+try_hmax:
+    mov rcx, rsi
+    lea rdx, [rip + key_hmax]
+    call match_key
+    test rax, rax
+    jz try_vacc
+    mov rcx, rax
+    call parse_positive
+    test eax, eax
+    jz read_line
+    movss dword ptr [rip + HORIZONTAL_MAX], xmm0
+    xorps xmm0, xmmword ptr [rip + SIGN_MASK]
+    movss dword ptr [rip + HORIZONTAL_MAX_NEG], xmm0
+    jmp read_line
+try_vacc:
+    mov rcx, rsi
+    lea rdx, [rip + key_vacc]
+    call match_key
+    test rax, rax
+    jz try_vdecel
+    mov rcx, rax
+    call parse_positive
+    test eax, eax
+    jz read_line
+    movss dword ptr [rip + VERTICAL_ACCEL], xmm0
+    xorps xmm0, xmmword ptr [rip + SIGN_MASK]
+    movss dword ptr [rip + VERTICAL_ACCEL_NEG], xmm0
+    jmp read_line
+try_vdecel:
+    mov rcx, rsi
+    lea rdx, [rip + key_vdecel]
+    call match_key
+    test rax, rax
+    jz try_vmax
+    mov rcx, rax
+    call parse_coast
+    test eax, eax
+    jz read_line
+    movss dword ptr [rip + VERTICAL_DRAG], xmm0
+    jmp read_line
+try_vmax:
+    mov rcx, rsi
+    lea rdx, [rip + key_vmax]
+    call match_key
+    test rax, rax
+    jz read_line
+    mov rcx, rax
+    call parse_positive
+    test eax, eax
+    jz read_line
+    movss dword ptr [rip + VERTICAL_MAX], xmm0
+    xorps xmm0, xmmword ptr [rip + SIGN_MASK]
+    movss dword ptr [rip + VERTICAL_MAX_NEG], xmm0
     jmp read_line
 config_close:
     mov rcx, rbx
@@ -180,6 +264,71 @@ bool_true:
     ret
 bool_false:
     xor eax, eax
+    ret
+
+/* Parse a positive finite float no greater than 1,000,000. */
+parse_positive:
+    push rbx
+    sub rsp, 0x20
+float_trim:
+    mov al, byte ptr [rcx]
+    cmp al, ' '
+    je float_inc
+    cmp al, 9
+    jne float_call
+float_inc:
+    inc rcx
+    jmp float_trim
+float_call:
+    mov rbx, rcx
+    lea rdx, [rip + ENDPTR]
+    call qword ptr [rip + STRTOF_IAT]
+    cmp qword ptr [rip + ENDPTR], rbx
+    je float_invalid
+    ucomiss xmm0, dword ptr [rip + FLOAT_ZERO]
+    jbe float_invalid
+    ucomiss xmm0, dword ptr [rip + FLOAT_LIMIT]
+    ja float_invalid
+    mov eax, 1
+    jmp float_return
+float_invalid:
+    xor eax, eax
+float_return:
+    add rsp, 0x20
+    pop rbx
+    ret
+
+/* Parse a coast multiplier from 0 (instant stop) through 1 (no coast loss). */
+parse_coast:
+    push rbx
+    sub rsp, 0x20
+coast_trim:
+    mov al, byte ptr [rcx]
+    cmp al, ' '
+    je coast_inc
+    cmp al, 9
+    jne coast_call
+coast_inc:
+    inc rcx
+    jmp coast_trim
+coast_call:
+    mov rbx, rcx
+    lea rdx, [rip + ENDPTR]
+    call qword ptr [rip + STRTOF_IAT]
+    cmp qword ptr [rip + ENDPTR], rbx
+    je coast_invalid
+    ucomiss xmm0, dword ptr [rip + FLOAT_ZERO]
+    jp coast_invalid
+    jb coast_invalid
+    ucomiss xmm0, dword ptr [rip + FLOAT_ONE]
+    ja coast_invalid
+    mov eax, 1
+    jmp coast_return
+coast_invalid:
+    xor eax, eax
+coast_return:
+    add rsp, 0x20
+    pop rbx
     ret
 
 /* rcx=list text, rdx=destination, r8=max count, r9=1 rates / 2 ranges. */
@@ -278,6 +427,18 @@ key_autoplace:    .asciz "autoplace_presets:"
 key_range:        .asciz "range_presets:"
 key_panel:        .asciz "status_panel:"
 key_caps:         .asciz "caps_lock_macro_repeat:"
+key_hacc:         .asciz "flight_horizontal_acceleration:"
+key_hdecel:       .asciz "flight_horizontal_deceleration:"
+key_hmax:         .asciz "flight_horizontal_max_speed:"
+key_vacc:         .asciz "flight_vertical_acceleration:"
+key_vdecel:       .asciz "flight_vertical_deceleration:"
+key_vmax:         .asciz "flight_vertical_max_speed:"
+
+.p2align 4
+FLOAT_ZERO: .float 0.0
+FLOAT_ONE: .float 1.0
+FLOAT_LIMIT: .float 1000000.0
+SIGN_MASK: .long 0x80000000, 0, 0, 0
 
 .org 0x1000, 0
 /* Defaults used when the optional file is absent or unreadable. */
@@ -292,6 +453,14 @@ AUTOPLACE_VALUES:
 .org 0x1030, 0
 RANGE_VALUES:
 .long 20, 50, 100, 0, 0, 0, 0, 0
+.org 0x1050, 0
+HORIZONTAL_ACCEL:   .float 2.5, 2.5, 2.5, 2.5
+VERTICAL_ACCEL:     .float 0.2
+VERTICAL_ACCEL_NEG: .float -0.2
+HORIZONTAL_MAX:     .float 5000.0
+HORIZONTAL_MAX_NEG: .float -5000.0
+VERTICAL_MAX:       .float 5000.0
+VERTICAL_MAX_NEG:   .float -5000.0
 .org 0x1100, 0
 CONFIG_PATH:
 .space 0x200, 0

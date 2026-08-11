@@ -84,6 +84,9 @@ ld -mi386pep --image-base 0x1446ca000 -e config_init ^
   --defsym FGETS_IAT=0x1402e7fd8 ^
   --defsym FCLOSE_IAT=0x1402e7fb0 ^
   --defsym STRTOL_IAT=0x1402e8250 ^
+  --defsym STRTOF_IAT=0x1402e8248 ^
+  --defsym HORIZONTAL_DRAG=0x1446c37d4 ^
+  --defsym VERTICAL_DRAG=0x1446c37d8 ^
   -o config-payload.exe config-payload.o || goto :failed
 objcopy -O binary -j .text config-payload.exe config-payload.bin || goto :failed
 
