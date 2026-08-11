@@ -70,7 +70,6 @@ ld -mi386pep --image-base 0x1446c6000 -e mod_hud ^
   --defsym CLEAR_STATE=0x1446c37c0 ^
   --defsym MACRO_STATE=0x1446c4f08 ^
   --defsym IGNORE_LIQUID_STATE=0x1446c37dc ^
-  --defsym CONFIG_STATUS=0x1446cc000 ^
   --defsym PANEL_ENABLED=0x1446cc003 ^
   --defsym AUTOPLACE_VALUES=0x1446cc010 ^
   --defsym RANGE_VALUES=0x1446cc030 ^

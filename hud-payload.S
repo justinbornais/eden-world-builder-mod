@@ -18,7 +18,6 @@
 .extern CLEAR_STATE
 .extern MACRO_STATE
 .extern IGNORE_LIQUID_STATE
-.extern CONFIG_STATUS
 .extern PANEL_ENABLED
 .extern AUTOPLACE_VALUES
 .extern RANGE_VALUES
@@ -193,12 +192,6 @@ macro_save: lea rdx, [rip + str_select_slot]
 macro_apply: lea rdx, [rip + str_apply]
 macro_done: call append_string
 
-    cmp byte ptr [rip + CONFIG_STATUS], 2
-    jne config_done
-    lea rdx, [rip + str_config_missing]
-    call append_string
-config_done:
-
     mov byte ptr [r10], 0
     lea rax, [rip + panel_buffer]
     sub r10, rax
@@ -299,4 +292,3 @@ str_recording_bright:.asciz "RECORDING..."
 str_select_slot:     .asciz "Select save slot"
 str_apply:           .asciz "Apply preset"
 str_active:          .asciz "Active"
-str_config_missing:  .asciz "\nConfig: MISSING"

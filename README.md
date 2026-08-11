@@ -26,9 +26,9 @@ A binary patcher for the 64-bit v1.5.0 release of Eden World Builder. The includ
 
 ## Configuration
 
-Keep `mod-config.yaml` beside `Eden - Modded.exe` at runtime; settings are optional and use safe defaults when omitted.
+`mod-config.yaml` is optional; when it is absent, the mod uses its built-in defaults.
 
-The YAML file supports up to eight ordered `autoplace_presets` and `range_presets`, plus `status_panel` and `caps_lock_macro_repeat`; use `max` for every-update placement and `unlimited` for Eden's practical reach limit.
+When placed beside `Eden - Modded.exe`, the YAML file supports up to eight ordered `autoplace_presets` and `range_presets`, plus `status_panel` and `caps_lock_macro_repeat`; use `max` for every-update placement and `unlimited` for Eden's practical reach limit.
 
 ## Build
 

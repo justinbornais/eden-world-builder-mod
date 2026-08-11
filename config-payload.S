@@ -7,7 +7,7 @@
 .extern FCLOSE_IAT
 .extern STRTOL_IAT
 
-/* Load mod-config.yaml once. Status: 1=loaded, 2=missing/unreadable. */
+/* Load optional mod-config.yaml once; embedded defaults need no file. */
 .global config_init
 config_init:
     cmp byte ptr [rip + CONFIG_STATUS], 0
@@ -21,12 +21,12 @@ config_init:
     mov r8d, 511
     call qword ptr [rip + GETMODULEFILENAME_IAT]
     test eax, eax
-    jz config_missing
+    jz config_defaults
     lea rdi, [rip + CONFIG_PATH]
     mov ecx, eax
 find_slash:
     test ecx, ecx
-    jz config_missing
+    jz config_defaults
     dec ecx
     mov dl, byte ptr [rdi + rcx]
     cmp dl, '\\'
@@ -47,7 +47,7 @@ copy_name:
     lea rdx, [rip + mode_rb]
     call qword ptr [rip + FOPEN_IAT]
     test rax, rax
-    jz config_missing
+    jz config_defaults
     mov rbx, rax
 read_line:
     lea rcx, [rip + LINE_BUFFER]
@@ -125,8 +125,8 @@ config_close:
     call qword ptr [rip + FCLOSE_IAT]
     mov byte ptr [rip + CONFIG_STATUS], 1
     jmp config_exit
-config_missing:
-    mov byte ptr [rip + CONFIG_STATUS], 2
+config_defaults:
+    mov byte ptr [rip + CONFIG_STATUS], 1
 config_exit:
     add rsp, 0x20
     pop rdi
@@ -280,7 +280,7 @@ key_panel:        .asciz "status_panel:"
 key_caps:         .asciz "caps_lock_macro_repeat:"
 
 .org 0x1000, 0
-/* Defaults remain usable when the required file is missing. */
+/* Defaults used when the optional file is absent or unreadable. */
 CONFIG_STATUS:       .byte 0
 AUTOPLACE_COUNT:     .byte 5
 RANGE_COUNT:         .byte 4

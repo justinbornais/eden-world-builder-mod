@@ -292,7 +292,7 @@ static int build_repeat_payload(Code *c) {
     dword(c, (int32_t)(UINT64_C(0x1403128b0) - next)); byte(c, 1);
     byte(c, 0x0f); byte(c, 0x85);                 /* jne restore (rel32) */
     skip_all = c->n; dword(c, 0);
-    /* Load the required adjacent YAML configuration once per process. */
+    /* Load optional adjacent YAML configuration once per process. */
     byte(c, 0xe8);
     dword(c, (int32_t)(CONFIG_INIT_VA - (REPEAT_CODE_VA + c->n + 4)));
     /* Macro input is isolated in the second half of the injected section. */
@@ -1803,6 +1803,6 @@ int main(int argc, char **argv) {
     puts("Area clear: J sets point A, then J arms point B.");
     puts("Macros: M records/stops; 1-0 saves or selects a session preset.");
     puts("Macro recording automatically stops at 32,768 edits.");
-    puts("Runtime configuration: mod-config.yaml beside the generated EXE.");
+    puts("Optional runtime configuration: mod-config.yaml beside the generated EXE.");
     return 0;
 }
