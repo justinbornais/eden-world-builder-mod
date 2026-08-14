@@ -597,21 +597,31 @@ static int build_repeat_payload(Code *c) {
     /*
      * The coordinate selector alone is insufficient: placeBlock normally
      * rejects an occupied cell unless its block metadata marks it naturally
-     * replaceable (water, fire, and similar blocks). When O is active, enter
-     * the same native continuation used for an empty/replaceable cell. This
-     * retains the game's normal build, sound, multiplayer, and neighbor-update
-     * path instead of synthesizing a destroy followed by a second placement.
+     * replaceable (water, fire, and similar blocks). When O is active and the
+     * target is not bedrock (block ID 1), enter the same native continuation
+     * used for an empty/replaceable cell. Bedrock instead takes the game's
+     * occupied-cell rejection path, so the placement has no effect. This keeps
+     * the normal build, sound, multiplayer, and neighbor-update path instead of
+     * synthesizing a destroy followed by a second placement.
      * Keep this code past the embedded flight constants at 0x1ec/0x1f0.
      */
     if (c->n < 0x200) c->n = 0x200;
     c->replace_occupied_entry = c->n;
     {
-        size_t replace_native, liquid_original, water_native, lava_native;
+        size_t replace_inactive, replace_native;
+        size_t liquid_original, water_native, lava_native;
         size_t native_path, original_path;
         byte(c, 0x80); byte(c, 0x3d);
         next = REPEAT_CODE_VA + c->n + 5;
         dword(c, (int32_t)(REPLACE_STATE_VA - next)); byte(c, 0);
+        byte(c, 0x0f); byte(c, 0x84); replace_inactive = c->n; dword(c, 0);
+        byte(c, 0x83); byte(c, 0xf8); byte(c, 0x01); /* bedrock */
         byte(c, 0x0f); byte(c, 0x85); replace_native = c->n; dword(c, 0);
+        byte(c, 0xe9);
+        dword(c, (int32_t)(UINT64_C(0x1400ac34a) -
+                           (REPEAT_CODE_VA + c->n + 4)));
+
+        local32(c, replace_inactive, c->n);
         byte(c, 0x80); byte(c, 0x3d);
         next = REPEAT_CODE_VA + c->n + 5;
         dword(c, (int32_t)(IGNORE_LIQUID_STATE_VA - next)); byte(c, 0);

@@ -8,7 +8,7 @@ A binary patcher for the 64-bit v1.5.0 release of Eden World Builder. The includ
 | --- | --- |
 | `V` | Toggle flight; use WASD, Space, and Ctrl to move. |
 | `N` | Toggle noclip through all blocks. |
-| `O` | Toggle replace mode, which places into the targeted block. |
+| `O` | Toggle replace mode, which places into the targeted block except bedrock. |
 | `I` | Toggle targeting through water and lava; underwater breaks refill from adjacent water. |
 | `P` | Cycle repeat speed: 5/s, 10/s, 20/s, 50/s, maximum, then off. |
 | `R` | Cycle reach: 20 blocks, 50 blocks, 100 blocks, maximum practical range, then stock. |
