@@ -13,6 +13,10 @@ range_presets: [20, 50, 100, unlimited]
 status_panel: true
 caps_lock_macro_repeat: true
 
+# Appended between "eden_macros" and ".dat". For example, "_roads" loads
+# %APPDATA%\Eden\eden_macros_roads.dat. An empty value keeps the default file.
+macro_file_suffix: ""
+
 # Acceleration is added per update. Deceleration is momentum retained while
 # coasting: 0 stops instantly and 1 never slows.
 flight_horizontal_acceleration: 2.5

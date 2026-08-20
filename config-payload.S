@@ -116,12 +116,23 @@ try_caps:
     lea rdx, [rip + key_caps]
     call match_key
     test rax, rax
-    jz try_hacc
+    jz try_macro_suffix
     mov rcx, rax
     call parse_bool
     cmp eax, -1
     je read_line
     mov byte ptr [rip + CAPS_REPEAT_ENABLED], al
+    jmp read_line
+try_macro_suffix:
+    mov rcx, rsi
+    lea rdx, [rip + key_macro_suffix]
+    call match_key
+    test rax, rax
+    jz try_hacc
+    mov rcx, rax
+    lea rdx, [rip + MACRO_FILE_SUFFIX]
+    mov r8d, 0x100
+    call parse_suffix
     jmp read_line
 try_hacc:
     mov rcx, rsi
@@ -270,6 +281,121 @@ bool_true:
     ret
 bool_false:
     xor eax, eax
+    ret
+
+/*
+ * Parse a safe macro collection filename suffix after a configuration key.
+ * Quoted and unquoted values are accepted.  The value is appended between
+ * "eden_macros" and ".dat", so an empty value preserves the stock filename.
+ * Windows path separators, drive syntax, wildcards, and control characters
+ * are rejected so this setting cannot redirect macro persistence elsewhere.
+ * rcx=input, rdx=destination, r8=max bytes including the terminator.
+ */
+parse_suffix:
+    push rbx
+    push rsi
+    push rdi
+    sub rsp, 0x20
+    mov rsi, rcx
+    mov rdi, rdx
+    mov ebx, r8d
+    xor ecx, ecx
+    test ebx, ebx
+    jz suffix_invalid
+suffix_trim:
+    mov al, byte ptr [rsi]
+    cmp al, ' '
+    je suffix_trim_one
+    cmp al, 9
+    jne suffix_open
+suffix_trim_one:
+    inc rsi
+    jmp suffix_trim
+suffix_open:
+    xor r9d, r9d                         /* 0 = unquoted, 1/2 = quote */
+    cmp al, '"'
+    je suffix_double
+    cmp al, 39
+    je suffix_single
+    jmp suffix_copy
+suffix_double:
+    mov r9d, 1
+    inc rsi
+    jmp suffix_copy
+suffix_single:
+    mov r9d, 2
+    inc rsi
+suffix_copy:
+    mov al, byte ptr [rsi]
+    test al, al
+    jz suffix_end_or_invalid
+    cmp al, 13
+    je suffix_end_or_invalid
+    cmp al, 10
+    je suffix_end_or_invalid
+    test r9b, r9b
+    jnz suffix_quoted
+    cmp al, ' '
+    je suffix_finish
+    cmp al, 9
+    je suffix_finish
+    cmp al, '#'
+    je suffix_finish
+    jmp suffix_validate
+suffix_quoted:
+    cmp r9b, 1
+    jne suffix_check_single
+    cmp al, '"'
+    je suffix_finish
+    jmp suffix_validate
+suffix_check_single:
+    cmp al, 39
+    je suffix_finish
+suffix_validate:
+    mov r10b, al
+    cmp al, 0x20
+    jb suffix_invalid
+    cmp al, '\\'
+    je suffix_invalid
+    cmp al, '/'
+    je suffix_invalid
+    cmp al, ':'
+    je suffix_invalid
+    cmp al, '*'
+    je suffix_invalid
+    cmp al, '?'
+    je suffix_invalid
+    cmp al, '"'
+    je suffix_invalid
+    cmp al, '<'
+    je suffix_invalid
+    cmp al, '>'
+    je suffix_invalid
+    cmp al, '|'
+    je suffix_invalid
+    mov eax, ebx
+    dec eax
+    cmp ecx, eax
+    jae suffix_invalid
+    mov byte ptr [rdi + rcx], r10b
+    inc ecx
+    inc rsi
+    jmp suffix_copy
+suffix_end_or_invalid:
+    test r9b, r9b
+    jnz suffix_invalid
+suffix_finish:
+    mov byte ptr [rdi + rcx], 0
+    mov eax, 1
+    jmp suffix_return
+suffix_invalid:
+    mov byte ptr [rdi], 0
+    xor eax, eax
+suffix_return:
+    add rsp, 0x20
+    pop rdi
+    pop rsi
+    pop rbx
     ret
 
 /* Parse a positive finite float no greater than 1,000,000. */
@@ -433,6 +559,7 @@ key_autoplace:    .asciz "autoplace_presets:"
 key_range:        .asciz "range_presets:"
 key_panel:        .asciz "status_panel:"
 key_caps:         .asciz "caps_lock_macro_repeat:"
+key_macro_suffix: .asciz "macro_file_suffix:"
 key_hacc:         .asciz "flight_horizontal_acceleration:"
 key_hdecel:       .asciz "flight_horizontal_deceleration:"
 key_hmax:         .asciz "flight_horizontal_max_speed:"
@@ -474,3 +601,7 @@ LINE_BUFFER:
 .space 0x1f8, 0
 ENDPTR:
 .quad 0
+.org 0x1500, 0
+/* Empty means %APPDATA%\Eden\eden_macros.dat. */
+MACRO_FILE_SUFFIX:
+.space 0x100, 0

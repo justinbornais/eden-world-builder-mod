@@ -43,6 +43,7 @@ ld -mi386pep --image-base 0x1446c4000 -e macro_input ^
   --defsym PAINT_RETURN=0x1400abf85 ^
   --defsym META=0x1446c4f00 ^
   --defsym CONFIG_CAPS_ENABLED=0x1446cc004 ^
+  --defsym MACRO_FILE_SUFFIX=0x1446cc500 ^
   -o macro-payload.exe macro-payload.o || goto :failed
 
 echo [3/9] Extracting macro payload bytes...

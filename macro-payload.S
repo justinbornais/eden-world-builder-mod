@@ -20,6 +20,7 @@
 .extern PAINT_RETURN
 .extern META
 .extern CONFIG_CAPS_ENABLED
+.extern MACRO_FILE_SUFFIX
 .set MACRO_PTR,     META+0x00
 .set MACRO_STATE,   META+0x08
 .set MACRO_COUNT,   META+0x0c
@@ -262,7 +263,7 @@ macro_prepare_anchor:
 macro_prepare_done:
     ret
 
-/* Build %APPDATA%\Eden\eden_macros.dat in the allocation's tail buffer. */
+/* Build %APPDATA%\Eden\eden_macros<suffix>.dat in the tail buffer. */
 .org 0x400, 0xcc
 macro_make_path:
     mov rcx, qword ptr [rip + MACRO_PTR]
@@ -270,7 +271,7 @@ macro_make_path:
     xor edx, edx
 1:
     cmp edx, 400
-    jae 3f
+    jae 6f
     mov al, byte ptr [r10 + rdx]
     test al, al
     jz 2f
@@ -278,18 +279,43 @@ macro_make_path:
     inc edx
     jmp 1b
 2:
-    lea r11, [rip + macro_suffix]
+    lea r11, [rip + macro_prefix]
     xor r8d, r8d
-4:
+3:
     mov al, byte ptr [r11 + r8]
     mov byte ptr [rcx + rdx], al
     inc edx
     inc r8d
     test al, al
-    jnz 4b
+    jnz 3b
+    dec edx
+    lea r11, [rip + MACRO_FILE_SUFFIX]
+    xor r8d, r8d
+4:
+    cmp edx, 400
+    jae 6f
+    mov al, byte ptr [r11 + r8]
+    test al, al
+    jz 5f
+    mov byte ptr [rcx + rdx], al
+    inc edx
+    inc r8d
+    jmp 4b
+5:
+    lea r11, [rip + macro_extension]
+    xor r8d, r8d
+7:
+    cmp edx, 400
+    jae 6f
+    mov al, byte ptr [r11 + r8]
+    mov byte ptr [rcx + rdx], al
+    inc edx
+    inc r8d
+    test al, al
+    jnz 7b
     mov rax, rcx
     ret
-3:
+6:
     xor eax, eax
     ret
 
@@ -413,7 +439,8 @@ macro_save_file_done:
 appdata_name: .asciz "APPDATA"
 mode_rb:      .asciz "rb"
 mode_wb:      .asciz "wb"
-macro_suffix: .asciz "\\Eden\\eden_macros.dat"
+macro_prefix: .asciz "\\Eden\\eden_macros"
+macro_extension: .asciz ".dat"
 
 /* Resolve GetKeyState once and return the Caps Lock toggle bit in AL. */
 .org 0x700, 0xcc
