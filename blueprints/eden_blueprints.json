@@ -1,0 +1,111 @@
+{
+  "format": 1,
+  "collection_suffix": "_ai_examples",
+  "palette": {
+    "stone": {"id": 10, "color": 0, "orientation": 2},
+    "wood": {"id": 7, "color": 0, "orientation": 2},
+    "brick": {"id": 13, "color": 0, "orientation": 2},
+    "glass": {"id": 58, "color": 0, "orientation": 2},
+    "shingles": {"id": 56, "color": 0, "orientation": 2},
+    "shingles_ramp_x_min": {"id": 35, "color": 0, "orientation": 2},
+    "shingles_ramp_z_min": {"id": 32, "color": 0, "orientation": 2},
+    "shingles_ramp_x_max": {"id": 34, "color": 0, "orientation": 2},
+    "shingles_ramp_z_max": {"id": 34, "color": 0, "orientation": 2},
+    "ramp_test_32": {"id": 32, "color": 0, "orientation": 2},
+    "ramp_test_33": {"id": 33, "color": 0, "orientation": 2},
+    "ramp_test_34": {"id": 34, "color": 0, "orientation": 2},
+    "ramp_test_35": {"id": 35, "color": 0, "orientation": 2},
+    "dark_grey_sand": {"id": 4, "color": 36, "orientation": 2},
+    "white_sand": {"id": 4, "color": 9, "orientation": 2},
+    "yellow_sand": {"id": 4, "color": 21, "orientation": 2}
+  },
+  "designs": [
+    {
+      "slot": 0,
+      "name": "road_block",
+      "description": "A straight 17 by 9 road segment with dark-grey sand paving, white-sand edge lines, and yellow-sand center markers.",
+      "anchor": [0, 0, 0],
+      "operations": [
+        {"op": "box", "min": [0, 0, 0], "max": [16, 0, 8], "block": "dark_grey_sand"},
+        {"op": "box", "min": [0, 1, 0], "max": [16, 1, 8], "block": "dark_grey_sand"},
+        {"op": "box", "min": [0, 1, 0], "max": [16, 1, 0], "block": "white_sand"},
+        {"op": "box", "min": [0, 1, 8], "max": [16, 1, 8], "block": "white_sand"},
+        {"op": "box", "min": [1, 1, 4], "max": [2, 1, 4], "block": "yellow_sand"},
+        {"op": "box", "min": [5, 1, 4], "max": [6, 1, 4], "block": "yellow_sand"},
+        {"op": "box", "min": [9, 1, 4], "max": [10, 1, 4], "block": "yellow_sand"},
+        {"op": "box", "min": [13, 1, 4], "max": [14, 1, 4], "block": "yellow_sand"}
+      ]
+    },
+    {
+      "slot": 1,
+      "name": "small_house",
+      "description": "An 11 by 9 wood cabin with a stone foundation, taller interior walls, and a two-sided full-row shingles gable roof with raised angled caps and a brick chimney.",
+      "anchor": [0, 0, 0],
+      "operations": [
+        {"op": "box", "min": [0, 0, 0], "max": [10, 0, 8], "block": "stone"},
+        {"op": "box", "min": [1, 1, 1], "max": [9, 1, 7], "block": "wood"},
+
+        {"op": "box", "min": [0, 1, 8], "max": [10, 5, 8], "block": "wood"},
+        {"op": "box", "min": [0, 1, 0], "max": [10, 5, 0], "block": "wood"},
+        {"op": "box", "min": [0, 2, 0], "max": [1, 3, 0], "block": "wood"},
+        {"op": "box", "min": [4, 2, 0], "max": [6, 3, 0], "block": "wood"},
+        {"op": "box", "min": [9, 2, 0], "max": [10, 3, 0], "block": "wood"},
+        {"op": "box", "min": [2, 2, 0], "max": [3, 3, 0], "block": "glass"},
+        {"op": "box", "min": [7, 2, 0], "max": [8, 3, 0], "block": "glass"},
+
+        {"op": "box", "min": [0, 1, 0], "max": [0, 5, 8], "block": "wood"},
+        {"op": "box", "min": [10, 1, 0], "max": [10, 5, 8], "block": "wood"},
+        {"op": "box", "min": [0, 1, 0], "max": [0, 1, 8], "block": "wood"},
+        {"op": "box", "min": [0, 5, 0], "max": [0, 5, 8], "block": "wood"},
+        {"op": "box", "min": [10, 1, 0], "max": [10, 1, 8], "block": "wood"},
+        {"op": "box", "min": [10, 5, 0], "max": [10, 5, 8], "block": "wood"},
+        {"op": "box", "min": [0, 2, 2], "max": [0, 3, 3], "block": "glass"},
+        {"op": "box", "min": [10, 2, 5], "max": [10, 3, 6], "block": "glass"},
+
+        {"op": "box", "min": [1, 1, 0], "max": [9, 1, 0], "block": "wood"},
+        {"op": "box", "min": [1, 1, 8], "max": [9, 1, 8], "block": "wood"},
+        {"op": "box", "min": [1, 5, 0], "max": [9, 5, 0], "block": "wood"},
+        {"op": "box", "min": [1, 5, 8], "max": [9, 5, 8], "block": "wood"},
+        {"op": "box", "min": [2, 2, 8], "max": [3, 3, 8], "block": "glass"},
+        {"op": "box", "min": [7, 2, 8], "max": [8, 3, 8], "block": "glass"},
+
+        {"op": "line", "from": [0, 6, 0], "to": [10, 6, 0], "block": "shingles_ramp_z_min"},
+        {"op": "line", "from": [0, 6, 8], "to": [10, 6, 8], "block": "shingles_ramp_z_max"},
+
+        {"op": "box", "min": [0, 6, 1], "max": [10, 6, 7], "block": "shingles"},
+        {"op": "line", "from": [0, 7, 1], "to": [10, 7, 1], "block": "shingles_ramp_z_min"},
+        {"op": "line", "from": [0, 7, 7], "to": [10, 7, 7], "block": "shingles_ramp_z_max"},
+
+        {"op": "box", "min": [0, 7, 2], "max": [10, 7, 6], "block": "shingles"},
+        {"op": "line", "from": [0, 8, 2], "to": [10, 8, 2], "block": "shingles_ramp_z_min"},
+        {"op": "line", "from": [0, 8, 6], "to": [10, 8, 6], "block": "shingles_ramp_z_max"},
+
+        {"op": "box", "min": [0, 8, 3], "max": [10, 8, 5], "block": "shingles"},
+        {"op": "line", "from": [0, 9, 3], "to": [10, 9, 3], "block": "shingles_ramp_z_min"},
+        {"op": "line", "from": [0, 9, 5], "to": [10, 9, 5], "block": "shingles_ramp_z_max"},
+
+        {"op": "box", "min": [0, 9, 4], "max": [10, 9, 4], "block": "shingles"},
+        {"op": "block", "at": [5, 10, 4], "block": "shingles"},
+
+        {"op": "box", "min": [5, 5, 3], "max": [6, 13, 4], "block": "brick"}
+      ]
+    },
+    {
+      "slot": 2,
+      "name": "ramp_orientation_test",
+      "description": "A static test pad showing shingle ramp IDs 32, 33, 34, and 35 in separate 4 by 4 panels for orientation comparison.",
+      "anchor": [0, 0, 0],
+      "operations": [
+        {"op": "box", "min": [0, 0, 0], "max": [15, 0, 12], "block": "stone"},
+        {"op": "box", "min": [1, 1, 1], "max": [4, 1, 4], "block": "ramp_test_32"},
+        {"op": "box", "min": [6, 1, 1], "max": [9, 1, 4], "block": "ramp_test_33"},
+        {"op": "box", "min": [11, 1, 1], "max": [14, 1, 4], "block": "ramp_test_34"},
+        {"op": "box", "min": [1, 1, 8], "max": [4, 1, 11], "block": "ramp_test_35"},
+        {"op": "box", "min": [1, 1, 5], "max": [4, 1, 5], "block": "white_sand"},
+        {"op": "box", "min": [6, 1, 5], "max": [9, 1, 5], "block": "yellow_sand"},
+        {"op": "box", "min": [11, 1, 5], "max": [14, 1, 5], "block": "white_sand"},
+        {"op": "box", "min": [1, 1, 12], "max": [4, 1, 12], "block": "yellow_sand"}
+      ]
+    }
+  ]
+}

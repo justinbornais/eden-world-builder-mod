@@ -2,6 +2,7 @@ bundle/
 build/
 dist/
 .cache/
+__pycache__/
 *.exe
 *.o
 *.obj

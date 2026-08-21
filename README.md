@@ -32,6 +32,12 @@ When placed beside `Eden - Modded.exe`, the YAML file supports up to eight order
 
 Flight acceleration is added per game update; deceleration is a coast multiplier from `0` (instant stop) to `1` (no momentum loss), and maximum speed is a positive hard cap.
 
+## Blueprint compiler
+
+`blueprints\eden_macro_compiler.py` converts the declarative designs in `blueprints\eden_blueprints.json` into Eden's existing macro collection format. The generated example collection uses the `_ai_examples` suffix, so the adjacent configuration loads `%APPDATA%\Eden\eden_macros_ai_examples.dat` without replacing older collections. Press `M` and then `1` to select the road segment, or `M` and then `2` to select the small house; place the selected anchor block to replay the design.
+
+The compiler is intentionally deterministic: an LLM can produce JSON operations such as `box`, `frame`, `line`, and `block`, while the compiler expands and validates them before writing the binary macro file. Blueprint coordinates are `x,y,z` with `y` vertical; the compiler translates them to Eden's native `x,z,y` event order when writing the file.
+
 ## Build
 
 Place the original game at `Eden - World Builder.exe`, install the MSYS2 MinGW64 tools (`as`, `ld`, `objcopy`, and `gcc`), and run:

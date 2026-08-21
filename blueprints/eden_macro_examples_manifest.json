@@ -1,0 +1,101 @@
+{
+  "source": "eden_blueprints.json",
+  "output": "C:\\Users\\Justin\\AppData\\Roaming\\Eden\\eden_macros_ai_examples.dat",
+  "format": 1,
+  "magic": "EDNMAC01",
+  "slot_size": 786432,
+  "designs": [
+    {
+      "slot": 0,
+      "name": "road_block",
+      "description": "A straight 17 by 9 road segment with dark-grey sand paving, white-sand edge lines, and yellow-sand center markers.",
+      "anchor": [
+        0,
+        0,
+        0
+      ],
+      "coordinate_order": "blueprint x,y,z -> Eden native x,z,y",
+      "event_count": 306,
+      "bounds": {
+        "min": [
+          0,
+          0,
+          0
+        ],
+        "max": [
+          16,
+          1,
+          8
+        ]
+      },
+      "materials": [
+        4
+      ]
+    },
+    {
+      "slot": 1,
+      "name": "small_house",
+      "description": "An 11 by 9 wood cabin with a stone foundation, taller interior walls, and a two-sided full-row shingles gable roof with raised angled caps and a brick chimney.",
+      "anchor": [
+        0,
+        0,
+        0
+      ],
+      "coordinate_order": "blueprint x,y,z -> Eden native x,z,y",
+      "event_count": 626,
+      "bounds": {
+        "min": [
+          0,
+          0,
+          0
+        ],
+        "max": [
+          10,
+          13,
+          8
+        ]
+      },
+      "materials": [
+        7,
+        10,
+        13,
+        32,
+        34,
+        56,
+        58
+      ]
+    },
+    {
+      "slot": 2,
+      "name": "ramp_orientation_test",
+      "description": "A static test pad showing shingle ramp IDs 32, 33, 34, and 35 in separate 4 by 4 panels for orientation comparison.",
+      "anchor": [
+        0,
+        0,
+        0
+      ],
+      "coordinate_order": "blueprint x,y,z -> Eden native x,z,y",
+      "event_count": 288,
+      "bounds": {
+        "min": [
+          0,
+          0,
+          0
+        ],
+        "max": [
+          15,
+          1,
+          12
+        ]
+      },
+      "materials": [
+        4,
+        10,
+        32,
+        33,
+        34,
+        35
+      ]
+    }
+  ]
+}

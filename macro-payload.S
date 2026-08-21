@@ -210,9 +210,32 @@ macro_record:
     mov dword ptr [r10 + 12], edx
     mov edx, dword ptr [rax + 0x1c]
     mov dword ptr [r10 + 16], edx
+    mov byte ptr [r10 + 21], r11b
     mov dl, byte ptr [rax + 0x9ec]
     mov byte ptr [r10 + 20], dl
-    mov byte ptr [r10 + 21], r11b
+
+    /* Ramp/slant orientation is encoded in the placed block ID's low bits.
+     * The selected-block descriptor still contains the palette base ID at
+     * this point, so read the terrain after a native build and record the
+     * actual ID that was written.  This is what lets replay preserve all
+     * ramp orientations instead of collapsing them to one direction.
+     */
+    test r11b, r11b
+    jne macro_record_id_done
+    push rcx
+    push r10
+    sub rsp, 0x28
+    mov ecx, ebx
+    mov edx, esi
+    mov r8d, edi
+    call GETLAND
+    add rsp, 0x28
+    pop r10
+    pop rcx
+    test eax, eax
+    js macro_record_id_done
+    mov dword ptr [r10 + 12], eax
+macro_record_id_done:
     inc ecx
     mov dword ptr [rip + MACRO_COUNT], ecx
     cmp ecx, MAX_EVENTS
