@@ -68,14 +68,14 @@
     {
       "slot": 2,
       "name": "two_story_house",
-      "description": "A two-story wood house with five-block stories, a furnished kitchen and living room, two upstairs bedrooms, and a four-sided shingle teepee roof.",
+      "description": "A larger two-story wood house with five-block stories, a three-block-wide upstairs hallway, kitchen and living room, two bedrooms with painted beds, exterior and room doors, and a four-sided shingle teepee roof.",
       "anchor": [
         0,
         0,
         0
       ],
       "coordinate_order": "blueprint x,y,z -> Eden native x,z,y",
-      "event_count": 1267,
+      "event_count": 2230,
       "bounds": {
         "min": [
           0,
@@ -83,22 +83,23 @@
           0
         ],
         "max": [
-          12,
-          17,
-          10
+          16,
+          18,
+          14
         ]
       },
       "materials": [
-        4,
         7,
         10,
         13,
+        19,
         32,
         33,
         34,
         35,
         56,
-        58
+        58,
+        70
       ]
     }
   ]
