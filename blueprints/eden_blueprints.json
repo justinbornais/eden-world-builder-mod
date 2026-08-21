@@ -7,9 +7,9 @@
     "brick": {"id": 13, "color": 0, "orientation": 2},
     "glass": {"id": 58, "color": 0, "orientation": 2},
     "shingles": {"id": 56, "color": 0, "orientation": 2},
-    "shingles_ramp_x_min": {"id": 35, "color": 0, "orientation": 2},
+    "shingles_ramp_x_min": {"id": 33, "color": 0, "orientation": 2},
     "shingles_ramp_z_min": {"id": 32, "color": 0, "orientation": 2},
-    "shingles_ramp_x_max": {"id": 34, "color": 0, "orientation": 2},
+    "shingles_ramp_x_max": {"id": 35, "color": 0, "orientation": 2},
     "shingles_ramp_z_max": {"id": 34, "color": 0, "orientation": 2},
     "ramp_test_32": {"id": 32, "color": 0, "orientation": 2},
     "ramp_test_33": {"id": 33, "color": 0, "orientation": 2},
@@ -17,7 +17,9 @@
     "ramp_test_35": {"id": 35, "color": 0, "orientation": 2},
     "dark_grey_sand": {"id": 4, "color": 36, "orientation": 2},
     "white_sand": {"id": 4, "color": 9, "orientation": 2},
-    "yellow_sand": {"id": 4, "color": 21, "orientation": 2}
+    "yellow_sand": {"id": 4, "color": 21, "orientation": 2},
+    "bed_pillow": {"id": 4, "color": 9, "orientation": 2},
+    "bed_red": {"id": 13, "color": 0, "orientation": 2}
   },
   "designs": [
     {
@@ -92,19 +94,88 @@
     },
     {
       "slot": 2,
-      "name": "ramp_orientation_test",
-      "description": "A static test pad showing shingle ramp IDs 32, 33, 34, and 35 in separate 4 by 4 panels for orientation comparison.",
+      "name": "two_story_house",
+      "description": "A two-story wood house with five-block stories, a furnished kitchen and living room, two upstairs bedrooms, and a four-sided shingle teepee roof.",
       "anchor": [0, 0, 0],
       "operations": [
-        {"op": "box", "min": [0, 0, 0], "max": [15, 0, 12], "block": "stone"},
-        {"op": "box", "min": [1, 1, 1], "max": [4, 1, 4], "block": "ramp_test_32"},
-        {"op": "box", "min": [6, 1, 1], "max": [9, 1, 4], "block": "ramp_test_33"},
-        {"op": "box", "min": [11, 1, 1], "max": [14, 1, 4], "block": "ramp_test_34"},
-        {"op": "box", "min": [1, 1, 8], "max": [4, 1, 11], "block": "ramp_test_35"},
-        {"op": "box", "min": [1, 1, 5], "max": [4, 1, 5], "block": "white_sand"},
-        {"op": "box", "min": [6, 1, 5], "max": [9, 1, 5], "block": "yellow_sand"},
-        {"op": "box", "min": [11, 1, 5], "max": [14, 1, 5], "block": "white_sand"},
-        {"op": "box", "min": [1, 1, 12], "max": [4, 1, 12], "block": "yellow_sand"}
+        {"op": "box", "min": [0, 0, 0], "max": [12, 0, 10], "block": "stone"},
+
+        {"op": "box", "min": [1, 1, 1], "max": [11, 1, 9], "block": "wood"},
+        {"op": "box", "min": [1, 6, 1], "max": [11, 6, 9], "block": "wood"},
+
+        {"op": "box", "min": [0, 1, 0], "max": [12, 10, 0], "block": "wood"},
+        {"op": "box", "min": [0, 1, 10], "max": [12, 10, 10], "block": "wood"},
+        {"op": "box", "min": [0, 1, 1], "max": [0, 10, 9], "block": "wood"},
+        {"op": "box", "min": [12, 1, 1], "max": [12, 10, 9], "block": "wood"},
+
+        {"op": "box", "min": [1, 2, 0], "max": [3, 3, 0], "block": "glass"},
+        {"op": "box", "min": [5, 2, 0], "max": [6, 3, 0], "block": "glass"},
+        {"op": "box", "min": [9, 2, 0], "max": [11, 3, 0], "block": "glass"},
+        {"op": "box", "min": [1, 7, 0], "max": [3, 8, 0], "block": "glass"},
+        {"op": "box", "min": [5, 7, 0], "max": [6, 8, 0], "block": "glass"},
+        {"op": "box", "min": [9, 7, 0], "max": [11, 8, 0], "block": "glass"},
+        {"op": "box", "min": [1, 2, 10], "max": [3, 3, 10], "block": "glass"},
+        {"op": "box", "min": [9, 2, 10], "max": [11, 3, 10], "block": "glass"},
+        {"op": "box", "min": [1, 7, 10], "max": [3, 8, 10], "block": "glass"},
+        {"op": "box", "min": [9, 7, 10], "max": [11, 8, 10], "block": "glass"},
+        {"op": "box", "min": [0, 2, 3], "max": [0, 3, 4], "block": "glass"},
+        {"op": "box", "min": [12, 2, 6], "max": [12, 3, 7], "block": "glass"},
+        {"op": "box", "min": [0, 7, 3], "max": [0, 8, 4], "block": "glass"},
+        {"op": "box", "min": [12, 7, 6], "max": [12, 8, 7], "block": "glass"},
+
+        {"op": "box", "min": [1, 2, 8], "max": [4, 2, 8], "block": "stone"},
+        {"op": "box", "min": [1, 3, 8], "max": [4, 3, 8], "block": "wood"},
+        {"op": "box", "min": [4, 2, 8], "max": [4, 3, 8], "block": "brick"},
+        {"op": "box", "min": [2, 2, 5], "max": [4, 2, 5], "block": "stone"},
+        {"op": "box", "min": [7, 2, 2], "max": [10, 2, 2], "block": "wood"},
+        {"op": "box", "min": [7, 3, 2], "max": [10, 3, 2], "block": "glass"},
+        {"op": "box", "min": [8, 2, 8], "max": [10, 4, 9], "block": "brick"},
+        {"op": "box", "min": [8, 2, 7], "max": [10, 2, 7], "block": "stone"},
+
+        {"op": "box", "min": [5, 7, 1], "max": [5, 10, 9], "block": "wood"},
+        {"op": "box", "min": [7, 7, 1], "max": [7, 10, 9], "block": "wood"},
+        {"op": "box", "min": [5, 7, 4], "max": [5, 8, 5], "block": "glass"},
+        {"op": "box", "min": [7, 7, 4], "max": [7, 8, 5], "block": "glass"},
+        {"op": "line", "from": [6, 7, 1], "to": [6, 7, 9], "block": "stone"},
+        {"op": "box", "min": [2, 7, 2], "max": [2, 7, 2], "block": "bed_pillow"},
+        {"op": "box", "min": [3, 7, 2], "max": [4, 7, 2], "block": "bed_red"},
+        {"op": "box", "min": [8, 7, 2], "max": [8, 7, 2], "block": "bed_pillow"},
+        {"op": "box", "min": [9, 7, 2], "max": [10, 7, 2], "block": "bed_red"},
+        {"op": "box", "min": [3, 7, 3], "max": [3, 7, 3], "block": "stone"},
+        {"op": "box", "min": [9, 7, 3], "max": [9, 7, 3], "block": "stone"},
+
+        {"op": "box", "min": [1, 11, 1], "max": [11, 11, 9], "block": "shingles"},
+        {"op": "line", "from": [1, 11, 0], "to": [11, 11, 0], "block": "shingles_ramp_z_min"},
+        {"op": "line", "from": [1, 11, 10], "to": [11, 11, 10], "block": "shingles_ramp_z_max"},
+        {"op": "line", "from": [0, 11, 1], "to": [0, 11, 9], "block": "shingles_ramp_x_min"},
+        {"op": "line", "from": [12, 11, 1], "to": [12, 11, 9], "block": "shingles_ramp_x_max"},
+
+        {"op": "box", "min": [2, 12, 2], "max": [10, 12, 8], "block": "shingles"},
+        {"op": "line", "from": [2, 12, 1], "to": [10, 12, 1], "block": "shingles_ramp_z_min"},
+        {"op": "line", "from": [2, 12, 9], "to": [10, 12, 9], "block": "shingles_ramp_z_max"},
+        {"op": "line", "from": [1, 12, 2], "to": [1, 12, 8], "block": "shingles_ramp_x_min"},
+        {"op": "line", "from": [11, 12, 2], "to": [11, 12, 8], "block": "shingles_ramp_x_max"},
+
+        {"op": "box", "min": [3, 13, 3], "max": [9, 13, 7], "block": "shingles"},
+        {"op": "line", "from": [3, 13, 2], "to": [9, 13, 2], "block": "shingles_ramp_z_min"},
+        {"op": "line", "from": [3, 13, 8], "to": [9, 13, 8], "block": "shingles_ramp_z_max"},
+        {"op": "line", "from": [2, 13, 3], "to": [2, 13, 7], "block": "shingles_ramp_x_min"},
+        {"op": "line", "from": [10, 13, 3], "to": [10, 13, 7], "block": "shingles_ramp_x_max"},
+
+        {"op": "box", "min": [4, 14, 4], "max": [8, 14, 6], "block": "shingles"},
+        {"op": "line", "from": [4, 14, 3], "to": [8, 14, 3], "block": "shingles_ramp_z_min"},
+        {"op": "line", "from": [4, 14, 7], "to": [8, 14, 7], "block": "shingles_ramp_z_max"},
+        {"op": "line", "from": [3, 14, 4], "to": [3, 14, 6], "block": "shingles_ramp_x_min"},
+        {"op": "line", "from": [9, 14, 4], "to": [9, 14, 6], "block": "shingles_ramp_x_max"},
+
+        {"op": "box", "min": [5, 15, 5], "max": [7, 15, 5], "block": "shingles"},
+        {"op": "line", "from": [5, 15, 4], "to": [7, 15, 4], "block": "shingles_ramp_z_min"},
+        {"op": "line", "from": [5, 15, 6], "to": [7, 15, 6], "block": "shingles_ramp_z_max"},
+        {"op": "block", "at": [4, 15, 5], "block": "shingles_ramp_x_min"},
+        {"op": "block", "at": [8, 15, 5], "block": "shingles_ramp_x_max"},
+        {"op": "block", "at": [6, 16, 5], "block": "shingles"},
+
+        {"op": "box", "min": [6, 4, 5], "max": [7, 17, 6], "block": "brick"}
       ]
     }
   ]

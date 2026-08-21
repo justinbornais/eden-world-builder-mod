@@ -67,15 +67,15 @@
     },
     {
       "slot": 2,
-      "name": "ramp_orientation_test",
-      "description": "A static test pad showing shingle ramp IDs 32, 33, 34, and 35 in separate 4 by 4 panels for orientation comparison.",
+      "name": "two_story_house",
+      "description": "A two-story wood house with five-block stories, a furnished kitchen and living room, two upstairs bedrooms, and a four-sided shingle teepee roof.",
       "anchor": [
         0,
         0,
         0
       ],
       "coordinate_order": "blueprint x,y,z -> Eden native x,z,y",
-      "event_count": 288,
+      "event_count": 1267,
       "bounds": {
         "min": [
           0,
@@ -83,18 +83,22 @@
           0
         ],
         "max": [
-          15,
-          1,
-          12
+          12,
+          17,
+          10
         ]
       },
       "materials": [
         4,
+        7,
         10,
+        13,
         32,
         33,
         34,
-        35
+        35,
+        56,
+        58
       ]
     }
   ]
